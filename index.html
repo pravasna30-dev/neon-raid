@@ -129,7 +129,8 @@ const SECTOR_PALETTES=[
   {heli:'#ffff00',ship:'#cc00ff',sub:'#44ffaa'},
 ];
 function sectorPal(){ return SECTOR_PALETTES[(sectorN-1)%SECTOR_PALETTES.length]; }
-const BRIDGE_W = 520;
+const BRIDGE_W = 520;     // bridges pinch slightly narrower than the open river
+const BANK = 80;          // px reserved on each shore — just enough for a 54px tanker
 const PLAYER_Y = H - 130;
 
 /* canvas */
@@ -274,14 +275,16 @@ function riverAt(wy){
     Math.sin(wy*0.0010)*0.55+
     Math.sin(wy*0.0022+1.8)*0.32+
     Math.sin(wy*0.0005+3.9)*0.48
-  )*145;
-  let width=430+Math.sin(wy*0.0017+2.0)*120+Math.sin(wy*0.0008)*85;
-  width-=Math.min(140,sector*12);
-  width=Math.max(220,Math.min(590,width));
+  )*70;
+  // broad river: high floor, gentle variation, capped so BANK px stay on each shore
+  const maxWidth=W-BANK*2;                 // 720 - 160 = 560 widest
+  let width=525+Math.sin(wy*0.0017+2.0)*22+Math.sin(wy*0.0008)*14;
+  width-=Math.min(45,sector*6);            // tighten slightly as sectors climb
+  width=Math.max(465,Math.min(maxWidth,width));
   let center=W/2+f*wander;
   width=BRIDGE_W+(width-BRIDGE_W)*f;
   const half=width/2;
-  center=Math.max(65+half,Math.min(W-65-half,center));
+  center=Math.max(BANK+half,Math.min(W-BANK-half,center));
   return {l:center-half,r:center+half};
 }
 
