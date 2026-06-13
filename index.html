@@ -72,7 +72,7 @@
    - Version badge visible in HUD and game-over
    ===================================================================== */
 
-const W = 720, H = 760, VERSION = 'v2.1';
+const W = 720, H = 760, VERSION = 'v2.3';
 
 /* difficulty presets — all difficulty-sensitive params live here */
 const DIFF_PRESETS = [
@@ -118,6 +118,17 @@ const DIFF_PRESETS = [
 ];
 let activePreset = DIFF_PRESETS[1]; // default medium
 const SECTOR   = 3800;
+
+/* sector colour palettes for enemies — cycles every 6 sectors */
+const SECTOR_PALETTES=[
+  {heli:'#ff00ff',ship:'#ff6600',sub:'#00ffcc'},
+  {heli:'#ff2255',ship:'#ffaa00',sub:'#00ff88'},
+  {heli:'#aa00ff',ship:'#ccff00',sub:'#ff44bb'},
+  {heli:'#00ffcc',ship:'#ff3300',sub:'#aaff00'},
+  {heli:'#ff8800',ship:'#00aaff',sub:'#ff00cc'},
+  {heli:'#ffff00',ship:'#cc00ff',sub:'#44ffaa'},
+];
+function sectorPal(){ return SECTOR_PALETTES[(sectorN-1)%SECTOR_PALETTES.length]; }
 const BRIDGE_W = 520;
 const PLAYER_Y = H - 130;
 
@@ -289,7 +300,7 @@ let state,camY,spawnWy,nextBridgeK;
 let score,lives,sectorN,fuel;
 let player,bullets,enemies,enemyBullets,particles,popups,rings;
 let shake,dieTimer,invuln,fireCd,banner,lowFuelBeep;
-let jetTimer,fruitTimer,paused,tPrev=0,titleT=0,godMode=0;
+let jetTimer,fruitTimer,paused,tPrev=0,titleT=0,godMode=0,spreadMode=0;
 
 function newPlayer(){ return {x:W/2,vx:0,speed:250,w:32,h:40}; }
 function resetRun(){
@@ -297,7 +308,7 @@ function resetRun(){
   score=0; lives=3; sectorN=1; fuel=100;
   player=newPlayer();
   bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; popups=[]; rings=[];
-  shake=0; invuln=2; fireCd=0; banner=null; lowFuelBeep=0; godMode=0;
+  shake=0; invuln=2; fireCd=0; banner=null; lowFuelBeep=0; godMode=0; spreadMode=0;
   jetTimer=5; fruitTimer=rnd(8,16);
   paused=false;
   seedAhead();
@@ -332,22 +343,42 @@ function advanceSpawner(){
   const diff=diffScale(), wave=waveIntensity();
   const x=rnd(rv.l+margin,rv.r-margin);
   const r=Math.random();
-  if(r<0.13){
+  const pal=sectorPal();
+  if(r<0.12){
     enemies.push(Math.random()<0.14&&sectorN>=2
       ?{type:'godFuel',wy:spawnWy,x,w:32,h:58}
       :{type:'fuel',wy:spawnWy,x,w:32,h:58});
     return;
   }
-  if(r<0.13+0.27+diff*0.10){
+  if(r<0.136&&sectorN>=2){
+    /* spread-shot power-up (rare) */
+    enemies.push({type:'spreadPU',wy:spawnWy,x,w:34,h:34});
+    return;
+  }
+  if(r<0.40+diff*0.10){
     const spd=rnd(55,100+70*diff)*(1+wave*0.4);
-    enemies.push({type:'heli',wy:spawnWy,x,w:46,h:24,
+    enemies.push({type:'heli',wy:spawnWy,x,w:46,h:24,col:pal.heli,
       vx:(Math.random()<.5?-1:1)*spd,rotor:Math.random()*7,
       fireTimer:sectorN>=activePreset.heliFireSect?rnd(3,6):Infinity});
     return;
   }
-  if(r<0.13+0.27+0.25+diff*0.12){
-    enemies.push({type:'ship',wy:spawnWy,x,w:58,h:20,
+  if(r<0.60+diff*0.12){
+    /* varied ship sizes */
+    const sizes=[
+      {w:42,h:14,val:20,ss:0.73},
+      {w:58,h:20,val:30,ss:1.00},
+      {w:76,h:26,val:50,ss:1.30},
+    ];
+    const sz=sizes[Math.floor(Math.random()*3)];
+    enemies.push({type:'ship',wy:spawnWy,x,w:sz.w,h:sz.h,ss:sz.ss,val:sz.val,col:pal.ship,
       vx:(Math.random()<.5?-1:1)*rnd(18,40+28*diff)});
+    return;
+  }
+  if(r<0.73+diff*0.08&&sectorN>=2){
+    /* submarine — surfaces periodically */
+    enemies.push({type:'sub',wy:spawnWy,x,w:56,h:20,hp:1,col:pal.sub,hit:0,
+      vx:(Math.random()<.5?-1:1)*rnd(18,38+20*diff),
+      surfaceT:rnd(1.5,4),surfaced:false,fireTimer:rnd(2,4),val:90+sectorN*18});
     return;
   }
   // bank tankers
@@ -622,22 +653,39 @@ function update(dt){
   /* god mode countdown */
   if(godMode>0){ godMode-=dt; if(godMode<=0){godMode=0;SFX.godModeEnd();} }
 
+  /* spread shot timer */
+  if(spreadMode>0){ spreadMode-=dt; if(spreadMode<0) spreadMode=0; }
+
   /* player bullets */
   fireCd-=dt;
   if(fire&&fireCd<=0){
-    fireCd=0.16;
-    bullets.push({x:player.x,sy:PLAYER_Y-30,r:3.5});
+    fireCd=spreadMode>0?0.22:0.16;
+    if(spreadMode>0){
+      /* 5-way spread: forward + diagonal left/right + side left/right */
+      const spd=820;
+      [0, Math.PI/6,-Math.PI/6, Math.PI/3,-Math.PI/3].forEach(a=>{
+        bullets.push({x:player.x,sy:PLAYER_Y-30,r:3.5,
+          vx:Math.sin(a)*spd,vsy:Math.cos(a)*spd,spread:true});
+      });
+    } else {
+      bullets.push({x:player.x,sy:PLAYER_Y-30,r:3.5,vx:0,vsy:820});
+    }
     SFX.shoot();
     particles.push({x:player.x,y:PLAYER_Y-28,vx:rnd(-22,22),vy:-90,life:.14,t:0,col:'#88ffff',size:2.5});
   }
   for(let i=bullets.length-1;i>=0;i--){
-    const b=bullets[i]; b.sy-=820*dt;
-    if(b.sy<-28){bullets.splice(i,1);continue;}
-    const wy=camY+(PLAYER_Y-b.sy);
-    const rv=riverAt(wy);
-    if(b.x<rv.l+2||b.x>rv.r-2){
-      particles.push({x:b.x,y:b.sy,vx:0,vy:0,life:.18,t:0,col:'#00ffff',size:2.5});
-      bullets.splice(i,1);
+    const b=bullets[i];
+    b.sy-=(b.vsy||820)*dt;
+    if(b.vx) b.x+=b.vx*dt;
+    if(b.sy<-28||b.x<-60||b.x>W+60){bullets.splice(i,1);continue;}
+    /* only bank-stop non-spread bullets */
+    if(!b.spread){
+      const wy=camY+(PLAYER_Y-b.sy);
+      const rv=riverAt(wy);
+      if(b.x<rv.l+2||b.x>rv.r-2){
+        particles.push({x:b.x,y:b.sy,vx:0,vy:0,life:.18,t:0,col:'#00ffff',size:2.5});
+        bullets.splice(i,1);
+      }
     }
   }
 
@@ -689,6 +737,23 @@ function update(dt){
       e.x+=e.vx*dt; e.spin+=dt*5;
       e.wy+=player.speed*dt;  // keep fixed screen height
       if(e.x<-90||e.x>W+90){enemies.splice(i,1);continue;}
+    } else if(e.type==='sub'){
+      e.x+=e.vx*dt; if(e.hit>0) e.hit-=dt;
+      const subRv=riverAt(e.wy);
+      if(e.x<subRv.l+32){e.x=subRv.l+32;e.vx=Math.abs(e.vx);}
+      if(e.x>subRv.r-32){e.x=subRv.r-32;e.vx=-Math.abs(e.vx);}
+      e.surfaceT-=dt;
+      if(e.surfaceT<=0){
+        e.surfaced=!e.surfaced;
+        e.surfaceT=e.surfaced?rnd(3,5.5):rnd(5,8);
+      }
+      if(e.surfaced&&sy>30&&sy<H-50){
+        e.fireTimer-=dt;
+        if(e.fireTimer<=0){
+          e.fireTimer=rnd(1.8,3.8);
+          fireAtPlayer(e.x,e.wy,e.col||'#00ffcc',170+sectorN*25,0.22);
+        }
+      }
     } else if(e.type==='tanker'){
       if(e.hit>0) e.hit-=dt;
       e.fireTimer-=dt;
@@ -709,9 +774,11 @@ function update(dt){
     for(let j=bullets.length-1;j>=0;j--){
       const b=bullets[j];
       let hit=false;
-      if(e.type==='bridge')      hit=Math.abs(b.sy-sy)<18;
-      else if(e.type==='fruit')  hit=Math.abs(b.x-e.x)<22&&Math.abs(b.sy-sy)<22;
-      else                       hit=Math.abs(b.x-e.x)<e.w/2+b.r&&Math.abs(b.sy-sy)<e.h/2+b.r+5;
+      if(e.type==='bridge')          hit=Math.abs(b.sy-sy)<18;
+      else if(e.type==='fruit')      hit=Math.abs(b.x-e.x)<22&&Math.abs(b.sy-sy)<22;
+      else if(e.type==='spreadPU')   hit=Math.abs(b.x-e.x)<20&&Math.abs(b.sy-sy)<20;
+      else if(e.type==='sub')        hit=e.surfaced&&Math.abs(b.x-e.x)<e.w/2+b.r&&Math.abs(b.sy-sy)<e.h/2+b.r+5;
+      else                           hit=Math.abs(b.x-e.x)<e.w/2+b.r&&Math.abs(b.sy-sy)<e.h/2+b.r+5;
       if(!hit) continue;
       bullets.splice(j,1);
       if(e.type==='bridge'){
@@ -734,6 +801,12 @@ function update(dt){
           SFX.boom(); explode(e.x,sy,'#ff7722',14,false);
           popup(e.x,sy-18,'HIT! '+e.hp+'❤','#ff7722');
         }
+      } else if(e.type==='spreadPU'){
+        enemies.splice(i,1); destroyed=true;
+        spreadMode=6; SFX.sectorFanfare();
+        explode(e.x,sy,'#00ffff',28,false); explode(e.x,sy,'#ff00ff',18,false);
+        banner={txt:'↗ SPREAD SHOT ACTIVATED — 6s ↙',t:0,life:2.2};
+        popup(e.x,sy-36,'SPREAD SHOT!','#00ffff');
       } else if(e.type==='fuel'){
         enemies.splice(i,1); destroyed=true;
         SFX.boom(); explode(e.x,sy,'#ffe000',28,true);
@@ -752,12 +825,16 @@ function update(dt){
         popup(e.x,sy-50,e.fd.label,'#ffffff');
       } else if(e.type==='heli'){
         enemies.splice(i,1); destroyed=true;
-        SFX.boom(); explode(e.x,sy,'#ff00ff',26,false);
-        addScore(60,e.x,sy-18,'#ff00ff');
+        SFX.boom(); explode(e.x,sy,e.col||'#ff00ff',26,false);
+        addScore(60,e.x,sy-18,e.col||'#ff00ff');
+      } else if(e.type==='sub'){
+        enemies.splice(i,1); destroyed=true;
+        SFX.bigBoom(); explode(e.x,sy,e.col||'#00ffcc',30,true);
+        addScore(e.val||90,e.x,sy-22,e.col||'#00ffcc');
       } else if(e.type==='ship'){
         enemies.splice(i,1); destroyed=true;
-        SFX.boom(); explode(e.x,sy,'#ff6600',24,false);
-        addScore(30,e.x,sy-18,'#ff6600');
+        SFX.boom(); explode(e.x,sy,e.col||'#ff6600',24,false);
+        addScore(e.val||30,e.x,sy-18,e.col||'#ff6600');
       } else if(e.type==='jet'){
         enemies.splice(i,1); destroyed=true;
         SFX.bigBoom(); explode(e.x,sy,'#aaff22',28,true);
@@ -777,6 +854,18 @@ function update(dt){
     }
     if(e.type==='bridge'){ if(Math.abs(PLAYER_Y-sy)<15+player.h/2){loseLife();return;} continue; }
     if(e.type==='tanker'||e.type==='fruit') continue;
+    if(e.type==='spreadPU'){
+      if(Math.abs(player.x-e.x)<(e.w+player.w)/2&&Math.abs(PLAYER_Y-sy)<(e.h+player.h)/2){
+        enemies.splice(i,1); spreadMode=6; SFX.sectorFanfare();
+        explode(e.x,sy,'#00ffff',24,false);
+        banner={txt:'↗ SPREAD SHOT — 6s ↙',t:0,life:2.2};
+        popup(e.x,sy-38,'SPREAD SHOT!','#00ffff');
+      }
+      continue;
+    }
+    if(e.type==='sub'){
+      if(!e.surfaced) continue; // can't collide while submerged
+    }
     if(e.type==='godFuel'){
       if(Math.abs(player.x-e.x)<(e.w+player.w)/2&&Math.abs(PLAYER_Y-sy)<(e.h+player.h)/2){
         enemies.splice(i,1);
@@ -917,12 +1006,14 @@ function draw(){
   const dl=enemies.map(e=>({e,sy:PLAYER_Y-(e.wy-camY)})).sort((a,b)=>a.sy-b.sy);
   for(const {e,sy} of dl){
     if(sy<-130||sy>H+130) continue;
-    if(e.type==='fuel')   drawFuel(e.x,sy);
-    else if(e.type==='heli')   drawHeli(e,sy);
-    else if(e.type==='ship')   drawShip(e,sy);
-    else if(e.type==='jet')    drawJet(e,sy);
-    else if(e.type==='tanker') drawTanker(e,sy);
-    else if(e.type==='fruit')  drawFruit(e,sy);
+    if(e.type==='fuel')          drawFuel(e.x,sy);
+    else if(e.type==='heli')     drawHeli(e,sy);
+    else if(e.type==='ship')     drawShip(e,sy);
+    else if(e.type==='jet')      drawJet(e,sy);
+    else if(e.type==='tanker')   drawTanker(e,sy);
+    else if(e.type==='fruit')    drawFruit(e,sy);
+    else if(e.type==='sub')      drawSub(e,sy);
+    else if(e.type==='spreadPU') drawSpreadPU(e.x,sy);
     else if(e.type==='bridge')   drawBridge(sy,e);
     else if(e.type==='godFuel')  drawGodFuel(e.x,sy);
     else if(e.type==='bumper')   drawBumper(e,sy);
@@ -930,8 +1021,14 @@ function draw(){
 
   /* player bullets */
   ctx.save();
-  ctx.shadowColor='#88ffff'; ctx.shadowBlur=16; ctx.fillStyle='#efffff';
-  for(const b of bullets){ ctx.beginPath(); ctx.ellipse(b.x,b.sy,2.8,8,0,0,7); ctx.fill(); }
+  for(const b of bullets){
+    if(b.spread){
+      ctx.shadowColor='#ff00ff'; ctx.shadowBlur=14; ctx.fillStyle='#ffaaff';
+    } else {
+      ctx.shadowColor='#88ffff'; ctx.shadowBlur=16; ctx.fillStyle='#efffff';
+    }
+    ctx.beginPath(); ctx.ellipse(b.x,b.sy,2.8,7,0,0,7); ctx.fill();
+  }
   ctx.restore();
 
   /* enemy bullets */
@@ -1088,19 +1185,80 @@ function drawBumper(e,sy){
   ctx.restore();
 }
 
+function drawSpreadPU(x,sy){
+  ctx.save(); ctx.translate(x,sy);
+  const ph=(titleT*160)%360;
+  const col=`hsl(${ph},100%,65%)`;
+  ctx.shadowColor=col; ctx.shadowBlur=26;
+  ctx.strokeStyle=col; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.arc(0,0,17,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle='rgba(0,255,255,0.12)';
+  ctx.beginPath(); ctx.arc(0,0,17,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=12; ctx.strokeStyle=col; ctx.lineWidth=2;
+  // spread arrows
+  [-Math.PI/3,-Math.PI/6,0,Math.PI/6,Math.PI/3].forEach(a=>{
+    const dx=Math.sin(a)*15, dy=-Math.cos(a)*15;
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(dx,dy); ctx.stroke();
+    ctx.beginPath(); ctx.arc(dx,dy,2.5,0,7); ctx.fill();
+  });
+  ctx.shadowBlur=0; ctx.font='bold 8px "Courier New"'; ctx.textAlign='center';
+  ctx.fillStyle=col; ctx.fillText('SPREAD',0,8);
+  ctx.restore();
+}
+
+function drawSub(e,sy){
+  ctx.save(); ctx.translate(e.x,sy);
+  if(e.vx<0) ctx.scale(-1,1);
+  if(e.hit>0) ctx.translate(rnd(-1.5,1.5),0);
+  const col=e.col||'#00ffcc';
+  const alpha=e.surfaced?1:0.25;
+  ctx.globalAlpha=alpha;
+  ctx.shadowColor=col; ctx.shadowBlur=e.surfaced?20:6;
+  // hull
+  ctx.fillStyle=col+'33';
+  ctx.beginPath(); ctx.ellipse(0,2,27,9,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=col; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.ellipse(0,2,27,9,0,0,Math.PI*2); ctx.stroke();
+  // conning tower
+  if(e.surfaced){
+    ctx.fillStyle=col+'66'; ctx.fillRect(-5,-9,10,10);
+    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.strokeRect(-5,-9,10,10);
+    // periscope
+    ctx.beginPath(); ctx.moveTo(-2,-9); ctx.lineTo(-2,-16); ctx.lineTo(4,-16); ctx.lineWidth=2; ctx.stroke();
+  }
+  // torpedo tubes
+  ctx.fillStyle=col; ctx.fillRect(22,-2,8,3.5);
+  ctx.fillRect(22,2,8,3.5);
+  // hp pips
+  if(e.surfaced){
+    ctx.shadowBlur=4; ctx.fillStyle=col;
+    ctx.beginPath(); ctx.arc(0,-16,3,0,7); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  // periscope when submerged (just a tiny notch)
+  if(!e.surfaced){
+    ctx.globalAlpha=0.5; ctx.strokeStyle=col; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(-2,-8); ctx.lineTo(-2,-13); ctx.lineTo(3,-13); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+  ctx.restore();
+}
+
 function drawHeli(e,sy){
+  const col=e.col||'#ff00ff';
+  const colDim=col+'aa';
   const dir=e.vx>=0?1:-1;
   ctx.save(); ctx.translate(e.x,sy);
   if(dir<0) ctx.scale(-1,1);
-  ctx.shadowColor='#ff00ff'; ctx.shadowBlur=20; ctx.fillStyle='#ff00ff';
+  ctx.shadowColor=col; ctx.shadowBlur=20; ctx.fillStyle=col;
   ctx.beginPath(); ctx.ellipse(0,0,16,10,0,0,7); ctx.fill();
-  ctx.fillStyle='#cc00cc';
+  ctx.fillStyle=colDim;
   ctx.fillRect(-28,-3.5,18,7);
   ctx.fillRect(-36,-6,10,4);
-  ctx.shadowBlur=0; ctx.fillStyle='#ffccff';
+  ctx.shadowBlur=0; ctx.fillStyle=col+'44';
   ctx.beginPath(); ctx.ellipse(6,-1,6,5,0,0,7); ctx.fill();
   ctx.save(); ctx.rotate(e.rotor);
-  ctx.strokeStyle='rgba(255,180,255,0.9)'; ctx.lineWidth=2.5;
+  ctx.strokeStyle=col+'dd'; ctx.lineWidth=2.5;
   ctx.beginPath(); ctx.moveTo(-22,-10); ctx.lineTo(22,-10); ctx.stroke();
   ctx.restore();
   ctx.fillStyle='#fff'; ctx.fillRect(-2,-13,4,6);
@@ -1108,17 +1266,19 @@ function drawHeli(e,sy){
 }
 
 function drawShip(e,sy){
+  const col=e.col||'#ff6600';
   ctx.save(); ctx.translate(e.x,sy);
   if(e.vx<0) ctx.scale(-1,1);
-  ctx.shadowColor='#ff6600'; ctx.shadowBlur=18; ctx.fillStyle='#ff6600';
+  const ss=e.ss||1; if(ss!==1) ctx.scale(ss,ss);
+  ctx.shadowColor=col; ctx.shadowBlur=18; ctx.fillStyle=col;
   ctx.beginPath();
   ctx.moveTo(-30,-5); ctx.lineTo(24,-5); ctx.lineTo(30,3); ctx.lineTo(24,11); ctx.lineTo(-26,11); ctx.lineTo(-30,3);
   ctx.closePath(); ctx.fill();
-  ctx.shadowBlur=0; ctx.fillStyle='#ffcc88';
+  ctx.shadowBlur=0; ctx.fillStyle='#fff9cc';
   ctx.fillRect(-14,-13,20,9);
-  ctx.fillStyle='#7a3000';
+  ctx.fillStyle=col+'66';
   [[-10,-9],[0,-9]].forEach(([px,py])=>{ ctx.beginPath(); ctx.arc(px,py,2.5,0,7); ctx.fill(); });
-  ctx.fillStyle='#cc4400'; ctx.beginPath(); ctx.arc(10,-2,5,0,7); ctx.fill();
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(10,-2,5,0,7); ctx.fill();
   ctx.fillRect(14,-2,14,3.5);
   ctx.globalAlpha=0.5; ctx.strokeStyle='#66ccff'; ctx.lineWidth=1.5;
   ctx.beginPath(); ctx.moveTo(-30,7); ctx.lineTo(-44,7); ctx.stroke();
@@ -1245,6 +1405,16 @@ function drawHUD(){
   if(fr<=0.25&&Math.floor(titleT*5)%2===0){
     ctx.fillStyle='#ff2244'; ctx.shadowColor='#ff2244'; ctx.shadowBlur=12;
     ctx.fillText('▲ LOW FUEL — FLY OVER DEPOT ▲',W/2,by-24); ctx.shadowBlur=0;
+  }
+  // spread shot indicator
+  if(spreadMode>0){
+    const sf=Math.floor(titleT*10)%2===0||spreadMode>0.7;
+    if(sf){
+      ctx.textAlign='left'; ctx.font='bold 14px "Courier New"';
+      ctx.fillStyle='#00ffff'; ctx.shadowColor='#00ffff'; ctx.shadowBlur=14;
+      ctx.fillText('↗↑↖ SPREAD '+Math.ceil(spreadMode)+'s',12,H-62);
+      ctx.shadowBlur=0;
+    }
   }
   // god mode indicator
   if(godMode>0){
@@ -1395,8 +1565,10 @@ function drawTitle(){
     'destroy BRIDGES ...... clear sector + fuel',
     'M = mute  ·  P = pause  ·  L = legends',
     'R = restart  ·  Q = quit to title',
-    '⚡ GOD FUEL (violet) ..... 3s invincibility!',
+    '⚡ GOD FUEL (violet) ..... 3s god mode!',
+    '↗ SPREAD SHOT (cyan) .... 6s multi-directional fire',
     '🛡 BUMPERS on bends ..... bounce instead of crash',
+    '🤿 SUBMARINES ........... surface before shooting!',
   ];
   ctrl.forEach((l,i)=>ctx.fillText(l,W/2,498+i*22));
   const topL=getTopLegend();
