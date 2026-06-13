@@ -72,7 +72,7 @@
    - Version badge visible in HUD and game-over
    ===================================================================== */
 
-const W = 720, H = 760, VERSION = 'v2.4';
+const W = 720, H = 760, VERSION = 'v2.5';
 
 /* difficulty presets — all difficulty-sensitive params live here */
 const DIFF_PRESETS = [
@@ -135,8 +135,8 @@ const BRIDGE_W = 520;     // bridges pinch slightly narrower than the open river
    lateral room), larger bank → narrower river + roomier shores. Press B
    on the title / select screen to cycle and compare the feel.            */
 const BANK_PRESETS = [
-  {label:'BROADEST RIVER', bank:55},   // thin shores, maximal channel
-  {label:'BROAD RIVER',    bank:80},   // the v2.3 feel
+  {label:'BROADEST (90%)', bank:36},   // ~648px river — no room for bank tankers
+  {label:'BROAD RIVER',    bank:80},   // the v2.3 feel, tankers fit
   {label:'WIDE BANKS',     bank:120},  // narrower channel, roomy shores
 ];
 const LS_BANK = 'neonRaidV2_bank';
@@ -294,12 +294,12 @@ function riverAt(wy){
     Math.sin(wy*0.0005+3.9)*0.48
   )*70;
   // broad river: high floor, gentle variation, capped so BANK px stay on each shore
-  const maxWidth=W-BANK*2;                 // widest channel for current bank setting
-  const floor=Math.min(465,maxWidth);      // floor can't exceed the cap
+  const maxWidth=W-BANK*2;                 // channel the current bank setting allows
   const bridgeW=Math.min(BRIDGE_W,maxWidth);
-  let width=525+Math.sin(wy*0.0017+2.0)*22+Math.sin(wy*0.0008)*14;
-  width-=Math.min(45,sector*6);            // tighten slightly as sectors climb
-  width=Math.max(floor,Math.min(maxWidth,width));
+  // river FILLS the channel, minus a gentle meander + slow per-sector narrowing
+  const meander=(Math.sin(wy*0.0017+2.0)*0.5+Math.sin(wy*0.0008)*0.5+1)*16; // 0..32px
+  let width=maxWidth-6-meander-Math.min(40,sector*5);
+  width=Math.min(maxWidth,Math.max(Math.min(360,maxWidth),width));
   let center=W/2+f*wander;
   width=bridgeW+(width-bridgeW)*f;
   const half=width/2;
@@ -323,6 +323,7 @@ let score,lives,sectorN,fuel;
 let player,bullets,enemies,enemyBullets,particles,popups,rings;
 let shake,dieTimer,invuln,fireCd,banner,lowFuelBeep;
 let jetTimer,fruitTimer,paused,tPrev=0,titleT=0,godMode=0,spreadMode=0;
+let clouds=[],birds=[],birdTimer=4;   // ambient sky decoration
 
 function newPlayer(){ return {x:W/2,vx:0,speed:250,w:32,h:40}; }
 function resetRun(){
@@ -332,6 +333,7 @@ function resetRun(){
   bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; popups=[]; rings=[];
   shake=0; invuln=2; fireCd=0; banner=null; lowFuelBeep=0; godMode=0; spreadMode=0;
   jetTimer=5; fruitTimer=rnd(8,16);
+  birds=[]; birdTimer=rnd(3,7); initClouds();
   paused=false;
   seedAhead();
 }
@@ -379,7 +381,7 @@ function advanceSpawner(){
   }
   if(r<0.40+diff*0.10){
     const spd=rnd(55,100+70*diff)*(1+wave*0.4);
-    enemies.push({type:'heli',wy:spawnWy,x,w:46,h:24,col:pal.heli,
+    enemies.push({type:'heli',wy:spawnWy,x,w:46,h:24,col:pal.heli,variant:Math.floor(Math.random()*3),
       vx:(Math.random()<.5?-1:1)*spd,rotor:Math.random()*7,
       fireTimer:sectorN>=activePreset.heliFireSect?rnd(3,6):Infinity});
     return;
@@ -392,7 +394,7 @@ function advanceSpawner(){
       {w:76,h:26,val:50,ss:1.30},
     ];
     const sz=sizes[Math.floor(Math.random()*3)];
-    enemies.push({type:'ship',wy:spawnWy,x,w:sz.w,h:sz.h,ss:sz.ss,val:sz.val,col:pal.ship,
+    enemies.push({type:'ship',wy:spawnWy,x,w:sz.w,h:sz.h,ss:sz.ss,val:sz.val,col:pal.ship,variant:Math.floor(Math.random()*3),
       vx:(Math.random()<.5?-1:1)*rnd(18,40+28*diff)});
     return;
   }
@@ -410,12 +412,12 @@ function advanceSpawner(){
     const tankerVal=120+sectorN*40;
     const fireBase=Math.max(1.2,4.0-sectorN*0.38);
     if(leftW>65&&Math.random()<0.18+diff*0.14+wave*0.10){
-      enemies.push({type:'tanker',wy:spawnWy,x:rnd(28,rv.l-32),side:'left',
+      enemies.push({type:'tanker',wy:spawnWy,x:rnd(28,rv.l-32),side:'left',variant:Math.floor(Math.random()*3),
         w:54,h:26,hp:tankerHp,maxHp:tankerHp,
         fireTimer:rnd(fireBase*0.6,fireBase*1.4),val:tankerVal,hit:0});
     }
     if(rightW>65&&Math.random()<0.18+diff*0.14+wave*0.10){
-      enemies.push({type:'tanker',wy:spawnWy,x:rnd(rv.r+32,W-28),side:'right',
+      enemies.push({type:'tanker',wy:spawnWy,x:rnd(rv.r+32,W-28),side:'right',variant:Math.floor(Math.random()*3),
         w:54,h:26,hp:tankerHp,maxHp:tankerHp,
         fireTimer:rnd(fireBase*0.6,fireBase*1.4),val:tankerVal,hit:0});
     }
@@ -628,7 +630,7 @@ function respawnOrEnd(){
 function update(dt){
   titleT+=dt;
   if(state===ST.TITLE||state===ST.GAMEOVER||state===ST.SELECT){
-    camY+=65*dt; seedAhead(); updateFx(dt); return;
+    camY+=65*dt; seedAhead(); updateFx(dt); updateAmbience(dt); return;
   }
   if(state===ST.DYING){
     dieTimer-=dt; updateFx(dt); SFX.engineSet(0);
@@ -667,6 +669,7 @@ function update(dt){
   seedAhead();
   maybeSpawnJet(dt);
   maybeSpawnFruit(dt);
+  updateAmbience(dt);
 
   /* fuel */
   fuel-=dt*activePreset.fuelDrain*(player.speed/SPD_DEF);
@@ -968,6 +971,96 @@ function updateFx(dt){
   if(shake>0) shake=Math.max(0,shake-dt*30);
 }
 
+/* ── ambience: clouds over the banks + bird flocks ── */
+function updateAmbience(dt){ updateClouds(dt); maybeSpawnBirds(dt); updateBirds(dt); }
+
+function initClouds(){
+  clouds=[];
+  for(let i=0;i<13;i++) clouds.push(makeCloud(rnd(-80,H+80)));
+}
+function makeCloud(sy){
+  return {sy,
+    side:Math.random()<0.5?-1:1,   // -1 hugs the left bank, +1 the right
+    edge:rnd(4,60),                // px in from the screen edge
+    drift:rnd(-5,5),               // slow lateral sway
+    scale:rnd(0.55,1.5),
+    alpha:rnd(0.10,0.26)};
+}
+function updateClouds(dt){
+  const scroll=(state===ST.PLAYING?player.speed:65)*0.5;  // parallax: half river speed
+  for(const c of clouds){
+    c.sy+=scroll*dt; c.edge+=c.drift*dt;
+    if(c.edge<2||c.edge>66) c.drift*=-1;
+    if(c.sy>H+80) Object.assign(c,makeCloud(-80));
+  }
+}
+function drawClouds(){
+  for(const c of clouds){
+    const x=c.side<0 ? c.edge+18*c.scale : W-c.edge-18*c.scale;
+    ctx.save(); ctx.translate(x,c.sy); ctx.scale(c.scale,c.scale);
+    ctx.globalAlpha=c.alpha; ctx.shadowColor='#bfe0ff'; ctx.shadowBlur=18; ctx.fillStyle='#dbeaff';
+    for(const [px,py,r] of [[0,0,16],[-14,4,12],[15,4,12],[-6,-7,11],[8,-7,11]]){
+      ctx.beginPath(); ctx.arc(px,py,r,0,7); ctx.fill();
+    }
+    ctx.shadowBlur=0; ctx.globalAlpha=c.alpha*0.5; ctx.fillStyle='#9fc4ff';
+    ctx.beginPath(); ctx.ellipse(0,9,26,6,0,0,7); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function maybeSpawnBirds(dt){
+  birdTimer-=dt;
+  if(birdTimer>0) return;
+  birdTimer=rnd(7,15);
+  const n=3+Math.floor(Math.random()*4);   // 3..6 birds per flock
+  const left=Math.random()<0.5;
+  const baseY=rnd(50,H*0.55), speed=rnd(50,95);
+  for(let i=0;i<n;i++){
+    birds.push({i,n, x:left?-60:W+60, y:baseY,
+      vx:(left?1:-1)*speed, vy:rnd(-8,12),
+      flap:Math.random()*Math.PI*2, flapSpd:rnd(8,12),
+      sz:rnd(0.7,1.05), bob:rnd(0,Math.PI*2)});
+  }
+}
+function updateBirds(dt){
+  const drift=(state===ST.PLAYING?player.speed:65)*0.2;  // gentle parallax downward
+  for(let i=birds.length-1;i>=0;i--){
+    const b=birds[i];
+    b.x+=b.vx*dt; b.y+=b.vy*dt+drift*dt; b.flap+=b.flapSpd*dt; b.bob+=dt*1.5;
+    if(b.x<-100||b.x>W+100||b.y>H+100) birds.splice(i,1);
+  }
+}
+function drawBirds(){
+  for(const b of birds){
+    const off=birdFormationOffset(b.i,b.n);     // ← formation shape (see below)
+    const dir=b.vx>=0?1:-1;
+    drawBird(b.x+off.dx*dir, b.y+off.dy+Math.sin(b.bob)*3, b.sz, dir, b.flap);
+  }
+}
+function drawBird(x,y,s,dir,flap){
+  const wing=Math.sin(flap)*0.9;
+  ctx.save(); ctx.translate(x,y); ctx.scale(s*dir,s);
+  ctx.strokeStyle='#0b1330'; ctx.lineWidth=2.4; ctx.lineCap='round';
+  ctx.shadowColor='rgba(0,0,0,0.4)'; ctx.shadowBlur=4;
+  ctx.beginPath();
+  ctx.moveTo(-9,0);
+  ctx.quadraticCurveTo(-3,-7-wing*5,0,-wing*3);
+  ctx.quadraticCurveTo(3,-7-wing*5,9,0);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* Formation offset for bird i within a flock of n.
+   Default = a trailing V (echelon): the lead bird sits forward, the rest
+   fan out behind and to the sides. dx is along travel (negative = behind);
+   it's mirrored by flight direction in drawBirds. Reshape the flock here —
+   e.g. single-file line, tight cluster, or a sine ripple. */
+function birdFormationOffset(i,n){
+  const half=(n-1)/2;
+  const rank=Math.abs(i-half);      // 0 = leader, grows toward the wingtips
+  return {dx:-rank*16, dy:(i-half)*12};
+}
+
 /* ── render ── */
 function riverRows(){
   const out=[];
@@ -1024,6 +1117,9 @@ function draw(){
   ctx.beginPath(); for(let i=0;i<R.length;i++) i?ctx.lineTo(R[i].l,R[i].sy):ctx.moveTo(R[i].l,R[i].sy); ctx.stroke();
   ctx.beginPath(); for(let i=0;i<R.length;i++) i?ctx.lineTo(R[i].r,R[i].sy):ctx.moveTo(R[i].r,R[i].sy); ctx.stroke();
   ctx.restore();
+
+  /* drifting clouds over the banks */
+  drawClouds();
 
   /* entities */
   const dl=enemies.map(e=>({e,sy:PLAYER_Y-(e.wy-camY)})).sort((a,b)=>a.sy-b.sy);
@@ -1085,6 +1181,9 @@ function draw(){
     ctx.fillStyle=p.col; ctx.fillRect(p.x-p.size/2,p.y-p.size/2,p.size,p.size);
   }
   ctx.globalAlpha=1;
+
+  /* bird flocks pass overhead */
+  drawBirds();
 
   /* popups */
   ctx.textAlign='center';
@@ -1271,40 +1370,96 @@ function drawHeli(e,sy){
   const col=e.col||'#ff00ff';
   const colDim=col+'aa';
   const dir=e.vx>=0?1:-1;
+  const v=e.variant||0;
   ctx.save(); ctx.translate(e.x,sy);
   if(dir<0) ctx.scale(-1,1);
-  ctx.shadowColor=col; ctx.shadowBlur=20; ctx.fillStyle=col;
-  ctx.beginPath(); ctx.ellipse(0,0,16,10,0,0,7); ctx.fill();
-  ctx.fillStyle=colDim;
-  ctx.fillRect(-28,-3.5,18,7);
-  ctx.fillRect(-36,-6,10,4);
-  ctx.shadowBlur=0; ctx.fillStyle=col+'44';
-  ctx.beginPath(); ctx.ellipse(6,-1,6,5,0,0,7); ctx.fill();
-  ctx.save(); ctx.rotate(e.rotor);
-  ctx.strokeStyle=col+'dd'; ctx.lineWidth=2.5;
-  ctx.beginPath(); ctx.moveTo(-22,-10); ctx.lineTo(22,-10); ctx.stroke();
-  ctx.restore();
-  ctx.fillStyle='#fff'; ctx.fillRect(-2,-13,4,6);
+  ctx.shadowColor=col; ctx.shadowBlur=20;
+
+  if(v===1){
+    /* GUNSHIP — armored body, stub wings with rocket pods */
+    ctx.fillStyle=col;
+    ctx.beginPath(); ctx.ellipse(0,0,18,11,0,0,7); ctx.fill();
+    ctx.fillStyle=colDim; ctx.fillRect(-30,-4,20,8); ctx.fillRect(-40,-6,12,4);
+    ctx.shadowBlur=0; ctx.fillStyle=col;
+    ctx.fillRect(-4,-16,9,5); ctx.fillRect(-4,11,9,5);              // stub wings
+    ctx.fillStyle='#ffcc44'; ctx.fillRect(-1,-18,5,3); ctx.fillRect(-1,16,5,3); // rocket tips
+    ctx.fillStyle=col+'cc';                                         // armored nose
+    ctx.beginPath(); ctx.moveTo(16,-6); ctx.lineTo(25,0); ctx.lineTo(16,6); ctx.closePath(); ctx.fill();
+  } else if(v===2){
+    /* HEAVY — long fuselage, tandem rotors */
+    ctx.fillStyle=col; roundRect(-22,-9,44,18,8); ctx.fill();
+    ctx.fillStyle=colDim; ctx.fillRect(-34,-4,14,8);
+    ctx.shadowBlur=0; ctx.fillStyle=col+'44';
+    ctx.beginPath(); ctx.ellipse(11,-1,7,5,0,0,7); ctx.fill();
+  } else {
+    /* SCOUT — the light classic */
+    ctx.fillStyle=col;
+    ctx.beginPath(); ctx.ellipse(0,0,16,10,0,0,7); ctx.fill();
+    ctx.fillStyle=colDim; ctx.fillRect(-28,-3.5,18,7); ctx.fillRect(-36,-6,10,4);
+    ctx.shadowBlur=0; ctx.fillStyle=col+'44';
+    ctx.beginPath(); ctx.ellipse(6,-1,6,5,0,0,7); ctx.fill();
+  }
+
+  // rotor(s) — spinning blade + faint disc at each hub
+  ctx.shadowBlur=0;
+  const hubs=v===2?[[-13,-10],[13,-10]]:[[0,-10]];
+  const rad=v===2?13:21;
+  for(const [hx,hy] of hubs){
+    ctx.save(); ctx.translate(hx,hy); ctx.rotate(e.rotor);
+    ctx.globalAlpha=0.16; ctx.fillStyle=col;
+    ctx.beginPath(); ctx.arc(0,0,rad,0,7); ctx.fill(); ctx.globalAlpha=1;
+    ctx.strokeStyle=col+'dd'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(-rad,0); ctx.lineTo(rad,0); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.fillStyle='#fff'; ctx.fillRect(-2,-13,4,6);    // mast
   ctx.restore();
 }
 
 function drawShip(e,sy){
   const col=e.col||'#ff6600';
+  const v=e.variant||0;
   ctx.save(); ctx.translate(e.x,sy);
   if(e.vx<0) ctx.scale(-1,1);
   const ss=e.ss||1; if(ss!==1) ctx.scale(ss,ss);
-  ctx.shadowColor=col; ctx.shadowBlur=18; ctx.fillStyle=col;
-  ctx.beginPath();
-  ctx.moveTo(-30,-5); ctx.lineTo(24,-5); ctx.lineTo(30,3); ctx.lineTo(24,11); ctx.lineTo(-26,11); ctx.lineTo(-30,3);
-  ctx.closePath(); ctx.fill();
-  ctx.shadowBlur=0; ctx.fillStyle='#fff9cc';
-  ctx.fillRect(-14,-13,20,9);
-  ctx.fillStyle=col+'66';
-  [[-10,-9],[0,-9]].forEach(([px,py])=>{ ctx.beginPath(); ctx.arc(px,py,2.5,0,7); ctx.fill(); });
-  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(10,-2,5,0,7); ctx.fill();
-  ctx.fillRect(14,-2,14,3.5);
-  ctx.globalAlpha=0.5; ctx.strokeStyle='#66ccff'; ctx.lineWidth=1.5;
-  ctx.beginPath(); ctx.moveTo(-30,7); ctx.lineTo(-44,7); ctx.stroke();
+  ctx.shadowColor=col; ctx.shadowBlur=18;
+
+  if(v===1){
+    /* SPEEDBOAT — sleek planing hull + wake */
+    ctx.fillStyle=col;
+    ctx.beginPath();
+    ctx.moveTo(-26,2); ctx.lineTo(20,-4); ctx.lineTo(34,2); ctx.lineTo(18,8); ctx.lineTo(-26,8);
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur=0; ctx.fillStyle='#bdf0ff'; ctx.fillRect(-6,-3,12,5);   // windshield
+    ctx.fillStyle=col+'aa'; ctx.fillRect(-2,-1,9,3);
+    ctx.globalAlpha=0.5; ctx.strokeStyle='#bfe7ff'; ctx.lineWidth=2;       // wake
+    ctx.beginPath(); ctx.moveTo(-26,4); ctx.lineTo(-48,1);
+    ctx.moveTo(-26,7); ctx.lineTo(-46,11); ctx.stroke(); ctx.globalAlpha=1;
+  } else if(v===2){
+    /* GUNBOAT — armored hull, turret + radar mast */
+    ctx.fillStyle=col;
+    ctx.beginPath();
+    ctx.moveTo(-30,-4); ctx.lineTo(26,-4); ctx.lineTo(32,4); ctx.lineTo(26,12); ctx.lineTo(-28,12); ctx.lineTo(-32,4);
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur=0; ctx.fillStyle='#454c5a'; ctx.fillRect(-10,-12,16,9); // deckhouse
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(-2,-3,6,0,7); ctx.fill();  // turret
+    ctx.fillRect(2,-4.5,18,3);                                             // cannon
+    ctx.strokeStyle='#88ccff'; ctx.lineWidth=1.5;                          // radar mast
+    ctx.beginPath(); ctx.moveTo(-14,-12); ctx.lineTo(-14,-22); ctx.moveTo(-18,-22); ctx.lineTo(-10,-22); ctx.stroke();
+  } else {
+    /* FREIGHTER — the classic boxy cargo ship */
+    ctx.fillStyle=col;
+    ctx.beginPath();
+    ctx.moveTo(-30,-5); ctx.lineTo(24,-5); ctx.lineTo(30,3); ctx.lineTo(24,11); ctx.lineTo(-26,11); ctx.lineTo(-30,3);
+    ctx.closePath(); ctx.fill();
+    ctx.shadowBlur=0; ctx.fillStyle='#fff9cc'; ctx.fillRect(-14,-13,20,9);
+    ctx.fillStyle=col+'66';
+    [[-10,-9],[0,-9]].forEach(([px,py])=>{ ctx.beginPath(); ctx.arc(px,py,2.5,0,7); ctx.fill(); });
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(10,-2,5,0,7); ctx.fill();
+    ctx.fillRect(14,-2,14,3.5);
+    ctx.globalAlpha=0.5; ctx.strokeStyle='#66ccff'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(-30,7); ctx.lineTo(-44,7); ctx.stroke(); ctx.globalAlpha=1;
+  }
   ctx.restore();
 }
 
@@ -1322,20 +1477,43 @@ function drawJet(e,sy){
 }
 
 function drawTanker(e,sy){
+  const v=e.variant||0;
   ctx.save(); ctx.translate(e.x,sy);
   if(e.side==='right') ctx.scale(-1,1);
   if(e.hit>0) ctx.translate(rnd(-2,2),0);
+  // shared chassis + wheel slats
   ctx.fillStyle='#111'; ctx.fillRect(-27,9,54,10);
   ctx.strokeStyle='#444'; ctx.lineWidth=1;
   for(let tx=-24;tx<26;tx+=7){ ctx.beginPath(); ctx.moveTo(tx,9); ctx.lineTo(tx,19); ctx.stroke(); }
-  ctx.shadowColor='#ff4400'; ctx.shadowBlur=22; ctx.fillStyle='#2a0d00';
-  ctx.fillRect(-27,-13,54,23);
-  ctx.fillStyle='#7a2200';
-  [[-22,-11,12,21],[-5,-11,12,21],[11,-11,12,21]].forEach(([x,y,w,h])=>ctx.fillRect(x,y,w,h));
-  ctx.shadowBlur=26; ctx.fillStyle='#ff4400';
-  ctx.beginPath(); ctx.arc(2,-3,11,0,7); ctx.fill();
-  ctx.fillStyle='#cc2200'; ctx.fillRect(11,-2.5,20,5);
-  ctx.fillStyle='#ff6600'; ctx.fillRect(29,-2,6,4);
+
+  if(v===1){
+    /* CONTAINER carrier — stacked cargo */
+    ctx.shadowColor='#ffaa00'; ctx.shadowBlur=12;
+    const cols=['#cc4433','#33aa88','#4488cc','#ddaa44'];
+    [[-26,-2,16],[-9,-2,16],[8,-2,18],[-20,-14,16],[-2,-14,18]].forEach((b,i)=>{
+      ctx.fillStyle=cols[i%cols.length]; ctx.fillRect(b[0],b[1],b[2],11);
+      ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.strokeRect(b[0],b[1],b[2],11);
+    });
+  } else if(v===2){
+    /* GUN PLATFORM — armored bunker + heavy cannon */
+    ctx.shadowColor='#ff2200'; ctx.shadowBlur=18; ctx.fillStyle='#33373f';
+    roundRect(-26,-12,52,22,4); ctx.fill();
+    ctx.fillStyle='#555b66'; ctx.fillRect(-22,-9,44,8);
+    ctx.fillStyle='#888f9c'; ctx.beginPath(); ctx.arc(4,-2,8,0,7); ctx.fill();   // turret
+    ctx.fillStyle='#cfd6e0'; ctx.fillRect(10,-3.5,26,5);                          // long cannon
+    ctx.fillStyle='#ff6600'; ctx.fillRect(34,-3,5,4);
+  } else {
+    /* FUEL TANKER — the classic round tank */
+    ctx.shadowColor='#ff4400'; ctx.shadowBlur=22; ctx.fillStyle='#2a0d00';
+    ctx.fillRect(-27,-13,54,23);
+    ctx.fillStyle='#7a2200';
+    [[-22,-11,12,21],[-5,-11,12,21],[11,-11,12,21]].forEach(([x,y,w,h])=>ctx.fillRect(x,y,w,h));
+    ctx.shadowBlur=26; ctx.fillStyle='#ff4400';
+    ctx.beginPath(); ctx.arc(2,-3,11,0,7); ctx.fill();
+    ctx.fillStyle='#cc2200'; ctx.fillRect(11,-2.5,20,5);
+    ctx.fillStyle='#ff6600'; ctx.fillRect(29,-2,6,4);
+  }
+  // hp pips (shared)
   ctx.shadowBlur=0;
   for(let h=0;h<e.maxHp;h++){
     ctx.fillStyle=h<e.hp?'#ff4400':'#333';
@@ -1641,6 +1819,7 @@ function drawPaused(){
   player=newPlayer();
   bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; popups=[]; rings=[];
   fruitTimer=12; jetTimer=8;
+  birds=[]; birdTimer=rnd(2,5); initClouds();
   seedAhead();
   state=ST.TITLE;
 })();
