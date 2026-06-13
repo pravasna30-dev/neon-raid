@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>NEON RAID — a tribute to the 1982 river classic</title>
+<meta name="description" content="NEON RAID: a modern neon-retro browser tribute to the classic 1982 river shooter. Keyboard + touch. Free to play.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🚀</text></svg>">
+<style>
+  :root{
+    --cyan:#00f0ff; --magenta:#ff2bd6; --gold:#ffd24a; --bg:#05030f;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;background:var(--bg);overflow:hidden;font-family:'Courier New',monospace;
+    user-select:none;-webkit-user-select:none;touch-action:none}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 30%, #0c0820 0%, #05030f 70%)}
+  canvas{display:block;border-radius:6px;box-shadow:0 0 60px rgba(0,240,255,.18),0 0 120px rgba(255,43,214,.10)}
+  .overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:10}
+  .panel{background:rgba(8,5,26,.94);border:1px solid rgba(0,240,255,.5);border-radius:12px;
+    padding:28px 34px;color:#cfeFFF;text-align:center;max-width:90vw;
+    box-shadow:0 0 40px rgba(0,240,255,.25), inset 0 0 30px rgba(0,240,255,.05)}
+  .panel h2{color:var(--cyan);letter-spacing:4px;margin-bottom:16px;text-shadow:0 0 12px var(--cyan)}
+  .panel input{background:#0a0726;border:1px solid var(--magenta);color:#fff;font-family:inherit;
+    font-size:20px;padding:10px 14px;border-radius:8px;text-align:center;letter-spacing:3px;
+    text-transform:uppercase;width:240px;outline:none;box-shadow:0 0 14px rgba(255,43,214,.35)}
+  .panel button{margin-top:18px;background:linear-gradient(135deg,#ff2bd6,#7a1fff);border:none;color:#fff;
+    font-family:inherit;font-size:16px;letter-spacing:3px;padding:12px 28px;border-radius:8px;cursor:pointer;
+    box-shadow:0 0 18px rgba(255,43,214,.5)}
+  .panel button:active{transform:scale(.96)}
+  table{margin:10px auto;border-collapse:collapse;min-width:300px}
+  td,th{padding:6px 14px;font-size:15px;letter-spacing:1px}
+  th{color:var(--magenta);text-shadow:0 0 8px var(--magenta);border-bottom:1px solid rgba(255,43,214,.4)}
+  tr.me td{color:var(--gold);text-shadow:0 0 8px var(--gold)}
+  td:first-child{color:var(--cyan)}
+  #muteBtn{position:fixed;top:10px;right:12px;z-index:20;background:rgba(8,5,26,.7);
+    border:1px solid rgba(0,240,255,.4);color:var(--cyan);border-radius:8px;padding:6px 12px;
+    font-family:inherit;font-size:14px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game"></canvas></div>
+<button id="muteBtn" title="Toggle sound (M)">♪ ON</button>
+
+<div class="overlay" id="nameOverlay">
+  <div class="panel">
+    <h2>NEW LEGEND</h2>
+    <p style="margin-bottom:14px">Score <span id="finalScore" style="color:var(--gold)"></span> — enter your call sign</p>
+    <input id="nameInput" maxlength="10" placeholder="ACE" autocomplete="off">
+    <br><button id="saveScore">ENGRAVE IT</button>
+  </div>
+</div>
+
+<div class="overlay" id="boardOverlay">
+  <div class="panel">
+    <h2>HALL OF LEGENDS</h2>
+    <div id="boardRows"></div>
+    <button id="closeBoard">BACK</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+   NEON RAID — a modern tribute to the 1982 river shooter
+   Single-file canvas game. Keyboard + touch. GitHub Pages ready.
+   ============================================================ */
+
+const W = 480, H = 720;                 // internal resolution (vector art, scales crisply)
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let DPR = 1;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 3);
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H) * 0.985;
+  canvas.style.width  = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+  canvas.width  = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------------- audio (WebAudio synth, no assets) ---------------- */
+const SFX = {
+  ac:null, master:null, muted:false, engineOsc:null, engineGain:null,
+  init(){
+    if (this.ac) return;
+    try{
+      this.ac = new (window.AudioContext || window.webkitAudioContext)();
+      this.master = this.ac.createGain();
+      this.master.gain.value = 0.5;
+      this.master.connect(this.ac.destination);
+    }catch(e){ this.ac = null; }
+  },
+  resume(){ if (this.ac && this.ac.state === 'suspended') this.ac.resume(); },
+  env(type, f0, f1, dur, vol, when=0){
+    if (!this.ac || this.muted) return;
+    const t = this.ac.currentTime + when;
+    const o = this.ac.createOscillator(), g = this.ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+  noise(dur, vol, fc){
+    if (!this.ac || this.muted) return;
+    const t = this.ac.currentTime;
+    const len = Math.floor(this.ac.sampleRate * dur);
+    const buf = this.ac.createBuffer(1, len, this.ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i=0;i<len;i++) d[i] = (Math.random()*2-1) * (1 - i/len);
+    const src = this.ac.createBufferSource(); src.buffer = buf;
+    const f = this.ac.createBiquadFilter(); f.type='lowpass'; f.frequency.value = fc;
+    const g = this.ac.createGain(); g.gain.value = vol;
+    src.connect(f); f.connect(g); g.connect(this.master);
+    src.start(t);
+  },
+  shoot(){ this.env('square', 880, 160, 0.12, 0.12); },
+  boom(){ this.noise(0.5, 0.5, 900); this.env('sine', 140, 30, 0.5, 0.4); },
+  bigBoom(){ this.noise(0.9, 0.6, 600); this.env('sine', 100, 24, 0.9, 0.5); },
+  fuelTick(){ this.env('sine', 520, 660, 0.08, 0.07); },
+  warn(){ this.env('square', 220, 220, 0.09, 0.10); },
+  bridgeFanfare(){
+    const seq = [523, 659, 784, 1047];
+    seq.forEach((f,i)=> this.env('triangle', f, f, 0.18, 0.18, i*0.09));
+  },
+  gameOver(){
+    const seq = [392, 330, 262, 196];
+    seq.forEach((f,i)=> this.env('sawtooth', f, f*0.97, 0.3, 0.16, i*0.22));
+  },
+  engineStart(){
+    if (!this.ac || this.engineOsc) return;
+    this.engineOsc = this.ac.createOscillator();
+    this.engineGain = this.ac.createGain();
+    this.engineOsc.type = 'sawtooth';
+    this.engineOsc.frequency.value = 50;
+    this.engineGain.gain.value = 0;
+    this.engineOsc.connect(this.engineGain);
+    this.engineGain.connect(this.master);
+    this.engineOsc.start();
+  },
+  engineSet(speedRatio){
+    if (!this.engineGain) return;
+    const on = !this.muted;
+    this.engineGain.gain.value = on ? 0.018 + speedRatio*0.02 : 0;
+    this.engineOsc.frequency.value = 42 + speedRatio * 55;
+  },
+  engineStop(){
+    if (this.engineOsc){ try{ this.engineOsc.stop(); }catch(e){} this.engineOsc=null; this.engineGain=null; }
+  }
+};
+const muteBtn = document.getElementById('muteBtn');
+function toggleMute(){
+  SFX.muted = !SFX.muted;
+  muteBtn.textContent = SFX.muted ? '♪ OFF' : '♪ ON';
+}
+muteBtn.addEventListener('click', (e)=>{ e.stopPropagation(); toggleMute(); });
+
+/* ---------------- persistence ---------------- */
+const LS_KEY = 'neonRaidLegends_v1';
+function loadLegends(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEY)) || []; }catch(e){ return []; }
+}
+function saveLegends(list){
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(list)); }catch(e){}
+}
+let legends = loadLegends();
+function hiScore(){ return legends.length ? legends[0].score : 0; }
+
+/* ---------------- river geometry (deterministic) ---------------- */
+const SECTOR = 3600;            // world px per sector; a bridge guards each sector's end
+const BRIDGE_W = 340;
+function riverAt(wy){
+  const sector = Math.floor(wy / SECTOR);
+  const local = wy - sector * SECTOR;
+  const near = Math.min(local, SECTOR - local);
+  const f = Math.min(1, Math.max(0, (near - 60) / 320));     // 0 at bridge → 1 mid-sector
+  const wander = (Math.sin(wy*0.0011) * 0.6
+                + Math.sin(wy*0.0023 + 1.7) * 0.35
+                + Math.sin(wy*0.0005 + 4.0) * 0.5) * 112;
+  let width = 215 + Math.sin(wy*0.0017 + 2.0)*70 + Math.sin(wy*0.0008)*50;
+  width -= Math.min(60, sector * 7);                          // rivers narrow as you go deeper
+  width = Math.max(118, width);
+  let center = W/2 + f * wander;
+  width = BRIDGE_W + (width - BRIDGE_W) * f;
+  const half = width/2;
+  center = Math.max(34 + half, Math.min(W - 34 - half, center));
+  return { l: center - half, r: center + half };
+}
+
+/* ---------------- game state ---------------- */
+const ST = { TITLE:0, PLAYING:1, DYING:2, GAMEOVER:3 };
+let state = ST.TITLE;
+let camY = 0, spawnWy = 0, nextBridgeK = 1;
+let score = 0, lives = 3, sectorN = 1, fuel = 100;
+let player, bullets, enemies, particles, popups, rings;
+let shake = 0, dieTimer = 0, invuln = 0, fireCd = 0, banner = null, lowFuelBeep = 0;
+let jetTimer = 6, scoredThisRun = false, tPrev = 0, titleT = 0, paused = false;
+
+const PLAYER_Y = H - 130;
+const VAL = { ship:30, heli:60, fuel:80, jet:100, bridge:500 };
+
+function newPlayer(){
+  return { x: W/2, vx: 0, speed: 240, w: 30, h: 38 };
+}
+function resetRun(){
+  camY = 200; spawnWy = camY; nextBridgeK = 1;
+  score = 0; lives = 3; sectorN = 1; fuel = 100;
+  player = newPlayer();
+  bullets = []; enemies = []; particles = []; popups = []; rings = [];
+  shake = 0; invuln = 2; banner = null; jetTimer = 6; scoredThisRun = false;
+  seedAhead();
+}
+function seedAhead(){
+  while (spawnWy < camY + H + 240) advanceSpawner();
+}
+
+/* ---------------- spawning ---------------- */
+function rnd(a, b){ return a + Math.random() * (b - a); }
+function advanceSpawner(){
+  spawnWy += 150;
+  // bridge?
+  if (spawnWy >= nextBridgeK * SECTOR){
+    enemies.push({ type:'bridge', wy: nextBridgeK * SECTOR, hp: 1, hit: 0 });
+    nextBridgeK++;
+    return;
+  }
+  const local = spawnWy % SECTOR;
+  if (Math.min(local, SECTOR - local) < 320) return;     // keep bridge approach clear
+  const rv = riverAt(spawnWy);
+  const margin = 30;
+  if (rv.r - rv.l < margin*2 + 40) return;
+  const x = rnd(rv.l + margin, rv.r - margin);
+  const diff = Math.min(1, (sectorN - 1) * 0.15);
+  const r = Math.random();
+  if (r < 0.15){
+    enemies.push({ type:'fuel', wy: spawnWy, x, w: 30, h: 56 });
+  } else if (r < 0.40 + diff*0.12){
+    enemies.push({ type:'heli', wy: spawnWy, x, w: 40, h: 22,
+      vx: (Math.random()<.5?-1:1) * rnd(40, 80 + 60*diff), rotor: Math.random()*7 });
+  } else if (r < 0.62 + diff*0.15){
+    enemies.push({ type:'ship', wy: spawnWy, x, w: 52, h: 18,
+      vx: (Math.random()<.5?-1:1) * rnd(15, 35 + 25*diff) });
+  }
+}
+function maybeSpawnJet(dt){
+  if (sectorN < 2) return;
+  jetTimer -= dt;
+  if (jetTimer <= 0){
+    jetTimer = rnd(5, 11) - Math.min(4, sectorN*0.5);
+    const fromLeft = Math.random() < 0.5;
+    const sy = rnd(120, 320);
+    enemies.push({ type:'jet', wy: camY + (PLAYER_Y - sy), x: fromLeft ? -40 : W+40,
+      w: 38, h: 14, vx: (fromLeft?1:-1) * rnd(230, 330) });
+  }
+}
+
+/* ---------------- fx ---------------- */
+function explode(x, y, col, n=26, big=false){
+  for (let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2, sp = rnd(40, big?330:230);
+    particles.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp,
+      life: rnd(.35,.8), t:0, col, size: rnd(1.5, big?4.5:3) });
+  }
+  rings.push({ x, y, r: 4, vr: big?420:300, life: .45, t: 0, col });
+  shake = Math.min(14, shake + (big?12:7));
+}
+function popup(x, y, txt, col){
+  popups.push({ x, y, txt, col, t: 0, life: 0.9 });
+}
+
+/* ---------------- input ---------------- */
+const keys = {};
+window.addEventListener('keydown', e=>{
+  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key)) e.preventDefault();
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if ((e.key === 'p' || e.key === 'P') && state === ST.PLAYING) paused = !paused;
+  if (state === ST.TITLE && (e.key === 'Enter' || e.key === ' ')) startGame();
+  if (state === ST.GAMEOVER && (e.key === 'Enter') && !overlayOpen()) startGame();
+});
+window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+let touch = { active:false, x:0, y:0, fire:false };
+canvas.addEventListener('pointerdown', e=>{
+  SFX.init(); SFX.resume();
+  const p = toGame(e);
+  if (state === ST.TITLE){ startGame(); return; }
+  if (state === ST.GAMEOVER && !overlayOpen()){ startGame(); return; }
+  touch.active = true; touch.fire = true; touch.x = p.x; touch.y = p.y;
+});
+canvas.addEventListener('pointermove', e=>{
+  if (!touch.active) return;
+  const p = toGame(e);
+  touch.x = p.x; touch.y = p.y;
+});
+window.addEventListener('pointerup', ()=>{ touch.active = false; touch.fire = false; });
+function toGame(e){
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+}
+function overlayOpen(){
+  return nameOverlay.style.display === 'flex' || boardOverlay.style.display === 'flex';
+}
+document.addEventListener('visibilitychange', ()=>{
+  if (document.hidden && state === ST.PLAYING) paused = true;
+});
+
+/* ---------------- overlays ---------------- */
+const nameOverlay = document.getElementById('nameOverlay');
+const boardOverlay = document.getElementById('boardOverlay');
+const nameInput = document.getElementById('nameInput');
+
+document.getElementById('saveScore').addEventListener('click', commitScore);
+nameInput.addEventListener('keydown', e=>{ if (e.key === 'Enter') commitScore(); e.stopPropagation(); });
+document.getElementById('closeBoard').addEventListener('click', ()=>{ boardOverlay.style.display = 'none'; });
+
+function commitScore(){
+  const name = (nameInput.value.trim() || 'ACE').toUpperCase().slice(0,10);
+  legends.push({ name, score, sector: sectorN, date: new Date().toISOString().slice(0,10) });
+  legends.sort((a,b)=> b.score - a.score);
+  legends = legends.slice(0, 10);
+  saveLegends(legends);
+  nameOverlay.style.display = 'none';
+  showBoard(name, score);
+}
+function showBoard(hlName, hlScore){
+  const rowsEl = document.getElementById('boardRows');
+  if (!legends.length){
+    rowsEl.innerHTML = '<p style="padding:18px 8px;opacity:.8">No legends yet.<br>Be the first to carve your name.</p>';
+  } else {
+    let html = '<table><tr><th>#</th><th>PILOT</th><th>SCORE</th><th>SECTOR</th></tr>';
+    legends.forEach((l,i)=>{
+      const me = (hlName && l.name === hlName && l.score === hlScore) ? ' class="me"' : '';
+      html += `<tr${me}><td>${i+1}</td><td>${l.name}</td><td>${l.score.toLocaleString()}</td><td>${l.sector}</td></tr>`;
+    });
+    rowsEl.innerHTML = html + '</table>';
+  }
+  boardOverlay.style.display = 'flex';
+}
+
+/* ---------------- flow ---------------- */
+function startGame(){
+  SFX.init(); SFX.resume(); SFX.engineStart();
+  nameOverlay.style.display = 'none';
+  boardOverlay.style.display = 'none';
+  resetRun();
+  paused = false;
+  state = ST.PLAYING;
+}
+function loseLife(reason){
+  SFX.bigBoom();
+  explode(player.x, PLAYER_Y, '#00f0ff', 36, true);
+  explode(player.x, PLAYER_Y, '#ff2bd6', 22, true);
+  lives--;
+  state = ST.DYING;
+  dieTimer = 1.3;
+}
+function respawnOrEnd(){
+  if (lives <= 0){
+    state = ST.GAMEOVER;
+    SFX.engineSet(0);
+    SFX.gameOver();
+    if (score > 0 && (legends.length < 10 || score > legends[legends.length-1].score)){
+      document.getElementById('finalScore').textContent = score.toLocaleString();
+      nameInput.value = '';
+      nameOverlay.style.display = 'flex';
+      setTimeout(()=> nameInput.focus(), 50);
+    }
+    return;
+  }
+  const rv = riverAt(camY);
+  player = newPlayer();
+  player.x = (rv.l + rv.r) / 2;
+  fuel = 100;
+  invuln = 2.5;
+  // clear hazards currently on screen so the respawn is fair
+  enemies = enemies.filter(e=>{
+    if (e.type === 'bridge' || e.type === 'fuel') return true;
+    const sy = PLAYER_Y - (e.wy - camY);
+    return sy < -60 || sy > H + 60;
+  });
+  state = ST.PLAYING;
+}
+
+/* ---------------- update ---------------- */
+function update(dt){
+  titleT += dt;
+  if (state === ST.TITLE || state === ST.GAMEOVER){
+    camY += 60 * dt;            // slow ambient scroll behind menus
+    seedAhead();
+    updateAmbient(dt);
+    return;
+  }
+  if (paused) return;
+
+  if (state === ST.DYING){
+    dieTimer -= dt;
+    updateFx(dt);
+    SFX.engineSet(0);
+    if (dieTimer <= 0) respawnOrEnd();
+    return;
+  }
+
+  /* --- controls --- */
+  const left  = keys['arrowleft'] || keys['a'];
+  const right = keys['arrowright'] || keys['d'];
+  const up    = keys['arrowup'] || keys['w'];
+  const down  = keys['arrowdown'] || keys['s'];
+  const firing = keys[' '] || keys['x'] || touch.fire;
+
+  const ACC = 1400, MAXVX = 330;
+  if (left)  player.vx -= ACC * dt;
+  if (right) player.vx += ACC * dt;
+  if (!left && !right) player.vx *= Math.pow(0.0008, dt);
+  if (touch.active){
+    const dx = touch.x - player.x;
+    player.vx = Math.max(-MAXVX, Math.min(MAXVX, dx * 9));
+  }
+  player.vx = Math.max(-MAXVX, Math.min(MAXVX, player.vx));
+  player.x += player.vx * dt;
+  player.x = Math.max(14, Math.min(W - 14, player.x));
+
+  const SPD_MIN = 130, SPD_MAX = 430, SPD_DEF = 240;
+  let target = SPD_DEF;
+  if (up) target = SPD_MAX;
+  if (down) target = SPD_MIN;
+  if (touch.active){
+    if (touch.y < PLAYER_Y - 160) target = SPD_MAX;
+    else if (touch.y > PLAYER_Y + 40) target = SPD_MIN;
+  }
+  player.speed += (target - player.speed) * Math.min(1, dt * 3);
+  SFX.engineSet((player.speed - SPD_MIN) / (SPD_MAX - SPD_MIN));
+
+  camY += player.speed * dt;
+  seedAhead();
+  maybeSpawnJet(dt);
+
+  /* --- fuel --- */
+  fuel -= dt * 2.1 * (player.speed / SPD_DEF);
+  if (fuel < 25){
+    lowFuelBeep -= dt;
+    if (lowFuelBeep <= 0){ SFX.warn(); lowFuelBeep = 0.55; }
+  }
+  if (fuel <= 0){ fuel = 0; loseLife('fuel'); return; }
+
+  /* --- firing --- */
+  fireCd -= dt;
+  if (firing && fireCd <= 0){
+    fireCd = 0.18;
+    bullets.push({ x: player.x, sy: PLAYER_Y - 26, r: 3 });
+    SFX.shoot();
+    particles.push({ x: player.x, y: PLAYER_Y - 24, vx: rnd(-20,20), vy: -80,
+      life: .15, t: 0, col: '#aef6ff', size: 2 });
+  }
+
+  /* --- bullets --- */
+  for (let i = bullets.length - 1; i >= 0; i--){
+    const b = bullets[i];
+    b.sy -= 760 * dt;
+    if (b.sy < -20){ bullets.splice(i,1); continue; }
+    const wy = camY + (PLAYER_Y - b.sy);
+    const rv = riverAt(wy);
+    if (b.x < rv.l + 2 || b.x > rv.r - 2){
+      particles.push({ x: b.x, y: b.sy, vx:0, vy:0, life:.2, t:0, col:'#7df', size:2.5 });
+      bullets.splice(i,1);
+    }
+  }
+
+  /* --- enemies --- */
+  for (let i = enemies.length - 1; i >= 0; i--){
+    const e = enemies[i];
+    const sy = PLAYER_Y - (e.wy - camY);
+    if (sy > H + 140){ enemies.splice(i,1); continue; }
+    if (e.type === 'heli'){
+      e.rotor += dt * 30;
+      e.x += e.vx * dt;
+      const rv = riverAt(e.wy);
+      if (e.x < rv.l + 26){ e.x = rv.l + 26; e.vx = Math.abs(e.vx); }
+      if (e.x > rv.r - 26){ e.x = rv.r - 26; e.vx = -Math.abs(e.vx); }
+    } else if (e.type === 'ship'){
+      e.x += e.vx * dt;
+      const rv = riverAt(e.wy);
+      if (e.x < rv.l + 32){ e.x = rv.l + 32; e.vx = Math.abs(e.vx); }
+      if (e.x > rv.r - 32){ e.x = rv.r - 32; e.vx = -Math.abs(e.vx); }
+    } else if (e.type === 'jet'){
+      e.x += e.vx * dt;
+      if (e.x < -70 || e.x > W + 70){ enemies.splice(i,1); continue; }
+    } else if (e.type === 'bridge'){
+      if (e.hit > 0) e.hit -= dt;
+    }
+    if (sy < -160) continue;
+
+    /* bullet hits */
+    for (let j = bullets.length - 1; j >= 0; j--){
+      const b = bullets[j];
+      let hit = false;
+      if (e.type === 'bridge'){
+        hit = Math.abs(b.sy - sy) < 16;
+      } else {
+        hit = Math.abs(b.x - e.x) < e.w/2 + b.r && Math.abs(b.sy - sy) < e.h/2 + b.r + 4;
+      }
+      if (hit){
+        bullets.splice(j,1);
+        if (e.type === 'bridge'){
+          enemies.splice(i,1);
+          SFX.bridgeFanfare(); SFX.bigBoom();
+          explode(W/2, sy, '#ffd24a', 50, true);
+          explode(W/2 - 90, sy, '#ff2bd6', 24, true);
+          explode(W/2 + 90, sy, '#00f0ff', 24, true);
+          addScore(VAL.bridge, W/2, sy - 24, '#ffd24a');
+          sectorN++;
+          banner = { txt: 'SECTOR ' + (sectorN-1) + ' CLEARED  +500', t: 0, life: 2.2 };
+        } else {
+          enemies.splice(i,1);
+          SFX.boom();
+          const col = e.type === 'fuel' ? '#ffd24a' : (e.type === 'heli' ? '#ff2bd6' : '#ff7a3c');
+          explode(e.x, sy, col, e.type === 'fuel' ? 34 : 26, e.type === 'fuel');
+          addScore(VAL[e.type], e.x, sy - 16, col);
+        }
+        break;
+      }
+    }
+  }
+
+  /* --- player vs world --- */
+  if (invuln > 0) invuln -= dt;
+  else {
+    if (bankCrash()){ loseLife('bank'); return; }
+    // entities
+    for (let i = enemies.length - 1; i >= 0; i--){
+      const e = enemies[i];
+      const sy = PLAYER_Y - (e.wy - camY);
+      if (e.type === 'fuel'){
+        if (Math.abs(player.x - e.x) < (e.w + player.w)/2 && Math.abs(PLAYER_Y - sy) < (e.h + player.h)/2){
+          if (fuel < 100){
+            fuel = Math.min(100, fuel + dt * 30);
+            if (Math.random() < dt * 9) SFX.fuelTick();
+          }
+        }
+        continue;
+      }
+      if (e.type === 'bridge'){
+        if (Math.abs(PLAYER_Y - sy) < 14 + player.h/2){ loseLife('bridge'); return; }
+        continue;
+      }
+      if (Math.abs(player.x - e.x) < (e.w + player.w)/2 - 4 &&
+          Math.abs(PLAYER_Y - sy) < (e.h + player.h)/2 - 2){
+        enemies.splice(i,1);
+        explode(e.x, sy, '#ff7a3c', 24);
+        loseLife('enemy');
+        return;
+      }
+    }
+  }
+
+  updateFx(dt);
+}
+
+function bankCrash(){
+  for (let oy = -14; oy <= 16; oy += 10){
+    const wy = camY - oy;                 // rows around the player
+    const rv = riverAt(wy);
+    const half = oy < 0 ? 8 : 13;         // nose is narrower than wings
+    if (player.x - half < rv.l + 2 || player.x + half > rv.r - 2) return true;
+  }
+  return false;
+}
+
+function addScore(v, x, y, col){
+  score += v;
+  scoredThisRun = true;
+  popup(x, y, '+' + v, col);
+}
+
+function updateFx(dt){
+  for (let i = particles.length - 1; i >= 0; i--){
+    const p = particles[i];
+    p.t += dt;
+    if (p.t >= p.life){ particles.splice(i,1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += 60 * dt;
+    p.y += (state === ST.PLAYING ? player.speed : 60) * dt * 0.4;
+  }
+  for (let i = rings.length - 1; i >= 0; i--){
+    const r = rings[i];
+    r.t += dt; r.r += r.vr * dt;
+    if (r.t >= r.life) rings.splice(i,1);
+  }
+  for (let i = popups.length - 1; i >= 0; i--){
+    const p = popups[i];
+    p.t += dt; p.y -= 36 * dt;
+    if (p.t >= p.life) popups.splice(i,1);
+  }
+  if (banner){ banner.t += dt; if (banner.t > banner.life) banner = null; }
+  if (shake > 0) shake = Math.max(0, shake - dt * 26);
+}
+function updateAmbient(dt){
+  updateFx(dt);
+  for (let i = enemies.length - 1; i >= 0; i--){
+    const sy = PLAYER_Y - (enemies[i].wy - camY);
+    if (sy > H + 140) enemies.splice(i,1);
+  }
+}
+
+/* ---------------- render ---------------- */
+function rows(){
+  const out = [];
+  for (let sy = -16; sy <= H + 16; sy += 8){
+    const wy = camY + (PLAYER_Y - sy);
+    out.push({ sy, ...riverAt(wy) });
+  }
+  return out;
+}
+
+function draw(){
+  ctx.save();
+  if (shake > 0) ctx.translate(rnd(-shake, shake) * 0.5, rnd(-shake, shake) * 0.5);
+
+  /* water */
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#061236'); g.addColorStop(0.6, '#0a1f55'); g.addColorStop(1, '#0d2a6e');
+  ctx.fillStyle = g;
+  ctx.fillRect(-8, -8, W + 16, H + 16);
+
+  /* water sheen lines that scroll */
+  ctx.strokeStyle = 'rgba(120,200,255,0.07)';
+  ctx.lineWidth = 2;
+  const off = camY % 46;
+  for (let y = -46; y < H + 46; y += 46){
+    const yy = y + off;
+    ctx.beginPath();
+    ctx.moveTo(0, yy);
+    for (let x = 0; x <= W; x += 24)
+      ctx.lineTo(x, yy + Math.sin((x + camY) * 0.02) * 3);
+    ctx.stroke();
+  }
+
+  /* banks */
+  const R = rows();
+  ctx.fillStyle = '#120b2e';
+  ctx.beginPath();
+  ctx.moveTo(-8, -16);
+  for (const r of R) ctx.lineTo(r.l, r.sy);
+  ctx.lineTo(-8, H + 16);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(W + 8, -16);
+  for (const r of R) ctx.lineTo(r.r, r.sy);
+  ctx.lineTo(W + 8, H + 16);
+  ctx.closePath();
+  ctx.fill();
+
+  /* synthwave grid on land */
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(-8, -16);
+  for (const r of R) ctx.lineTo(r.l, r.sy);
+  ctx.lineTo(-8, H + 16);
+  ctx.closePath();
+  ctx.moveTo(W + 8, -16);
+  for (const r of R) ctx.lineTo(r.r, r.sy);
+  ctx.lineTo(W + 8, H + 16);
+  ctx.closePath();
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(122,31,255,0.22)';
+  ctx.lineWidth = 1;
+  for (let y = -64; y < H + 64; y += 32){
+    const yy = y + (camY % 32);
+    ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(W, yy); ctx.stroke();
+  }
+  for (let x = 0; x <= W; x += 32){
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  ctx.restore();
+
+  /* glowing bank edges */
+  ctx.save();
+  ctx.shadowColor = '#00f0ff';
+  ctx.shadowBlur = 14;
+  ctx.strokeStyle = '#19e8ff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  for (let i = 0; i < R.length; i++) i ? ctx.lineTo(R[i].l, R[i].sy) : ctx.moveTo(R[i].l, R[i].sy);
+  ctx.stroke();
+  ctx.beginPath();
+  for (let i = 0; i < R.length; i++) i ? ctx.lineTo(R[i].r, R[i].sy) : ctx.moveTo(R[i].r, R[i].sy);
+  ctx.stroke();
+  ctx.restore();
+
+  /* entities */
+  for (const e of enemies){
+    const sy = PLAYER_Y - (e.wy - camY);
+    if (sy < -80 || sy > H + 80) continue;
+    if (e.type === 'fuel') drawFuel(e.x, sy, e);
+    else if (e.type === 'heli') drawHeli(e.x, sy, e);
+    else if (e.type === 'ship') drawShip(e.x, sy, e);
+    else if (e.type === 'jet') drawJet(e.x, sy, e);
+    else if (e.type === 'bridge') drawBridge(sy, e);
+  }
+
+  /* bullets */
+  ctx.save();
+  ctx.shadowColor = '#aef6ff'; ctx.shadowBlur = 10;
+  ctx.fillStyle = '#eaffff';
+  for (const b of bullets){
+    ctx.beginPath(); ctx.ellipse(b.x, b.sy, 2.4, 7, 0, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+
+  /* player */
+  if (state === ST.PLAYING && (invuln <= 0 || Math.floor(titleT * 14) % 2 === 0))
+    drawPlayer(player.x, PLAYER_Y, player.vx);
+
+  /* fx */
+  for (const r of rings){
+    const a = 1 - r.t / r.life;
+    ctx.strokeStyle = r.col;
+    ctx.globalAlpha = a * 0.8;
+    ctx.lineWidth = 2.5 * a + 0.5;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 7); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  for (const p of particles){
+    const a = 1 - p.t / p.life;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.col;
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center';
+  for (const p of popups){
+    const a = 1 - p.t / p.life;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.col;
+    ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.shadowColor = p.col; ctx.shadowBlur = 8;
+    ctx.fillText(p.txt, p.x, p.y);
+    ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+
+  if (state === ST.PLAYING || state === ST.DYING) drawHUD();
+  if (banner) drawBanner();
+  if (state === ST.TITLE) drawTitle();
+  if (state === ST.GAMEOVER) drawGameOver();
+  if (paused && state === ST.PLAYING) drawPaused();
+
+  /* subtle scanlines */
+  ctx.globalAlpha = 0.05;
+  ctx.fillStyle = '#000';
+  for (let y = 0; y < H; y += 4) ctx.fillRect(0, y, W, 1.4);
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+}
+
+/* ---- sprites (vector, glow) ---- */
+function drawPlayer(x, y, vx){
+  const tilt = Math.max(-0.3, Math.min(0.3, vx / 900));
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(tilt);
+  // engine flame
+  const fl = 10 + Math.sin(titleT * 40) * 4 + (player ? (player.speed - 130) / 30 : 0);
+  ctx.save();
+  ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 16;
+  ctx.fillStyle = '#ff5be2';
+  ctx.beginPath();
+  ctx.moveTo(-5, 16); ctx.lineTo(0, 16 + fl); ctx.lineTo(5, 16);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+  // body
+  ctx.shadowColor = '#00f0ff'; ctx.shadowBlur = 14;
+  ctx.fillStyle = '#dffcff';
+  ctx.beginPath();
+  ctx.moveTo(0, -20);
+  ctx.lineTo(6, -4); ctx.lineTo(16, 8); ctx.lineTo(16, 13); ctx.lineTo(5, 10);
+  ctx.lineTo(4, 16); ctx.lineTo(-4, 16); ctx.lineTo(-5, 10); ctx.lineTo(-16, 13);
+  ctx.lineTo(-16, 8); ctx.lineTo(-6, -4);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#00c8ff';
+  ctx.beginPath();
+  ctx.moveTo(0, -14); ctx.lineTo(3, -2); ctx.lineTo(-3, -2);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawHeli(x, y, e){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = '#ff2bd6'; ctx.shadowBlur = 12;
+  ctx.fillStyle = '#ff2bd6';
+  ctx.beginPath(); ctx.ellipse(0, 0, 14, 9, 0, 0, 7); ctx.fill();
+  // tail
+  const dir = e.vx >= 0 ? 1 : -1;
+  ctx.fillRect(dir > 0 ? -28 : 12, -2.5, 16, 5);
+  ctx.shadowBlur = 0;
+  // cockpit
+  ctx.fillStyle = '#ffd7f4';
+  ctx.beginPath(); ctx.ellipse(dir * 5, -1, 5, 4, 0, 0, 7); ctx.fill();
+  // rotor
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 2;
+  const r = 20, a = e.rotor;
+  ctx.beginPath();
+  ctx.moveTo(Math.cos(a) * -r, -10 + Math.sin(a) * 2.5);
+  ctx.lineTo(Math.cos(a) * r, -10 - Math.sin(a) * 2.5);
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(-1.5, -12, 3, 4);
+  ctx.restore();
+}
+function drawShip(x, y, e){
+  ctx.save();
+  ctx.translate(x, y);
+  if (e.vx < 0) ctx.scale(-1, 1);
+  ctx.shadowColor = '#ff7a3c'; ctx.shadowBlur = 12;
+  ctx.fillStyle = '#ff7a3c';
+  ctx.beginPath();
+  ctx.moveTo(-26, -4); ctx.lineTo(20, -4); ctx.lineTo(26, 2); ctx.lineTo(20, 9);
+  ctx.lineTo(-22, 9); ctx.lineTo(-26, 2);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#ffd2b3';
+  ctx.fillRect(-12, -11, 16, 8);
+  ctx.fillStyle = '#7a2d00';
+  ctx.fillRect(-8, -9, 3, 4); ctx.fillRect(-2, -9, 3, 4);
+  // wake
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = '#bfe9ff';
+  ctx.beginPath(); ctx.moveTo(-26, 6); ctx.lineTo(-38, 6); ctx.stroke();
+  ctx.restore();
+}
+function drawJet(x, y, e){
+  ctx.save();
+  ctx.translate(x, y);
+  if (e.vx < 0) ctx.scale(-1, 1);
+  ctx.shadowColor = '#b7ff3c'; ctx.shadowBlur = 12;
+  ctx.fillStyle = '#b7ff3c';
+  ctx.beginPath();
+  ctx.moveTo(19, 0); ctx.lineTo(-8, -6); ctx.lineTo(-14, -1); ctx.lineTo(-14, 1); ctx.lineTo(-8, 6);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 0.6;
+  ctx.strokeStyle = '#eaffc8';
+  ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-30, 0); ctx.stroke();
+  ctx.restore();
+}
+function drawFuel(x, y, e){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = '#ffd24a'; ctx.shadowBlur = 14;
+  ctx.fillStyle = '#241a02';
+  ctx.strokeStyle = '#ffd24a';
+  ctx.lineWidth = 2.5;
+  roundRect(-15, -28, 30, 56, 8);
+  ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#ffd24a';
+  ctx.font = 'bold 13px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  const word = 'FUEL';
+  for (let i = 0; i < word.length; i++) ctx.fillText(word[i], 0, -14 + i * 13);
+  ctx.restore();
+}
+function drawBridge(sy, e){
+  const rv = riverAt(e.wy);
+  ctx.save();
+  if (e.hit > 0) ctx.translate(rnd(-2,2), 0);
+  ctx.shadowColor = '#ffd24a'; ctx.shadowBlur = 12;
+  ctx.fillStyle = '#3a2c08';
+  ctx.fillRect(0, sy - 12, W, 24);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#ffd24a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0.5, sy - 12, W - 1, 24);
+  // girders
+  ctx.beginPath();
+  for (let x = 8; x < W; x += 24){
+    ctx.moveTo(x, sy - 12); ctx.lineTo(x + 12, sy + 12);
+    ctx.moveTo(x + 12, sy - 12); ctx.lineTo(x, sy + 12);
+  }
+  ctx.globalAlpha = 0.8;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  // roadway stripe
+  ctx.fillStyle = 'rgba(255,210,74,0.25)';
+  ctx.fillRect(0, sy - 2, W, 4);
+  ctx.restore();
+}
+function roundRect(x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/* ---- HUD & screens ---- */
+function drawHUD(){
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 18px "Courier New", monospace';
+  ctx.fillStyle = '#eaffff';
+  ctx.shadowColor = '#00f0ff'; ctx.shadowBlur = 8;
+  ctx.fillText(String(score).padStart(6, '0'), 14, 28);
+  ctx.font = '12px "Courier New", monospace';
+  ctx.fillStyle = '#9fdcff';
+  ctx.fillText('HI ' + String(Math.max(hiScore(), score)).padStart(6, '0'), 14, 46);
+  ctx.shadowBlur = 0;
+
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 14px "Courier New", monospace';
+  ctx.fillStyle = '#ff9ff0';
+  ctx.fillText('SECTOR ' + sectorN, W - 14, 28);
+
+  // lives
+  for (let i = 0; i < lives; i++){
+    ctx.save();
+    ctx.translate(W - 22 - i * 18, 42);
+    ctx.scale(0.42, 0.42);
+    ctx.fillStyle = '#dffcff';
+    ctx.shadowColor = '#00f0ff'; ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.moveTo(0, -20); ctx.lineTo(14, 12); ctx.lineTo(0, 6); ctx.lineTo(-14, 12);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // fuel bar
+  const bw = 180, bx = (W - bw) / 2, by = H - 30;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  roundRect(bx - 3, by - 3, bw + 6, 16, 7); ctx.fill();
+  const fr = fuel / 100;
+  const col = fr > 0.5 ? '#37ff9c' : fr > 0.25 ? '#ffd24a' : '#ff3b5b';
+  ctx.shadowColor = col; ctx.shadowBlur = 10;
+  ctx.fillStyle = col;
+  if (fr > 0.005){ roundRect(bx, by, Math.max(6, bw * fr), 10, 5); ctx.fill(); }
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 11px "Courier New", monospace';
+  ctx.fillStyle = '#dffcff';
+  ctx.fillText('FUEL', W / 2, by - 7);
+  if (fr <= 0.25 && Math.floor(titleT * 4) % 2 === 0){
+    ctx.fillStyle = '#ff3b5b';
+    ctx.shadowColor = '#ff3b5b'; ctx.shadowBlur = 10;
+    ctx.fillText('LOW FUEL — FIND A DEPOT', W / 2, by - 22);
+    ctx.shadowBlur = 0;
+  }
+  ctx.restore();
+}
+function drawBanner(){
+  const a = banner.t < 0.3 ? banner.t / 0.3 : banner.t > banner.life - 0.4 ? (banner.life - banner.t) / 0.4 : 1;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, a);
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.fillStyle = '#ffd24a';
+  ctx.shadowColor = '#ffd24a'; ctx.shadowBlur = 16;
+  ctx.fillText(banner.txt, W / 2, H * 0.38);
+  ctx.restore();
+}
+function neonText(txt, x, y, size, col, blur=18){
+  ctx.font = 'bold ' + size + 'px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = col; ctx.shadowBlur = blur;
+  ctx.fillStyle = col;
+  ctx.fillText(txt, x, y);
+  ctx.shadowBlur = 0;
+}
+function drawTitle(){
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,2,16,0.55)';
+  ctx.fillRect(0, 0, W, H);
+  const bob = Math.sin(titleT * 2) * 6;
+  neonText('NEON', W/2, 200 + bob, 64, '#00f0ff', 26);
+  neonText('RAID', W/2, 268 + bob, 64, '#ff2bd6', 26);
+  ctx.globalAlpha = 0.9;
+  neonText('a tribute to the 1982 river classic', W/2, 300 + bob, 13, '#9fdcff', 6);
+  ctx.globalAlpha = 1;
+
+  drawPlayer(W/2, 370 + bob * 0.5, Math.sin(titleT*1.3)*120);
+
+  if (Math.floor(titleT * 1.6) % 2 === 0)
+    neonText('TAP OR PRESS ENTER TO FLY', W/2, 452, 18, '#ffd24a', 14);
+
+  ctx.font = '13px "Courier New", monospace';
+  ctx.fillStyle = '#bfe9ff';
+  ctx.textAlign = 'center';
+  const lines = [
+    '◄ ► / A D ......... steer',
+    '▲ ▼ / W S ......... throttle',
+    'SPACE / tap ....... fire',
+    'fly over FUEL ..... refuel',
+    'destroy bridges ... next sector',
+    'M mute · P pause'
+  ];
+  lines.forEach((l, i)=> ctx.fillText(l, W/2, 500 + i * 22));
+
+  if (hiScore() > 0)
+    neonText('HALL OF LEGENDS: ' + legends[0].name + ' · ' + legends[0].score.toLocaleString(), W/2, 660, 13, '#ffd24a', 8);
+  ctx.restore();
+}
+function drawGameOver(){
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,2,16,0.6)';
+  ctx.fillRect(0, 0, W, H);
+  neonText('MISSION OVER', W/2, 250, 42, '#ff3b5b', 24);
+  neonText('SCORE  ' + score.toLocaleString(), W/2, 320, 26, '#eaffff', 12);
+  neonText('SECTOR ' + sectorN, W/2, 356, 16, '#9fdcff', 8);
+  if (score >= hiScore() && score > 0)
+    neonText('★ NEW HIGH SCORE ★', W/2, 396, 18, '#ffd24a', 16);
+  if (!overlayOpen() && Math.floor(titleT * 1.6) % 2 === 0)
+    neonText('TAP OR PRESS ENTER TO RETRY', W/2, 460, 16, '#37ff9c', 12);
+  ctx.restore();
+}
+function drawPaused(){
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,2,16,0.6)';
+  ctx.fillRect(0, 0, W, H);
+  neonText('PAUSED', W/2, H/2, 36, '#00f0ff', 20);
+  neonText('press P to resume', W/2, H/2 + 36, 14, '#9fdcff', 6);
+  ctx.restore();
+}
+
+/* ---------------- main loop ---------------- */
+function frame(t){
+  const dt = Math.min(0.05, (t - tPrev) / 1000 || 0.016);
+  tPrev = t;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+seedAheadInit();
+function seedAheadInit(){
+  camY = 200; spawnWy = camY; nextBridgeK = 1;
+  player = newPlayer();
+  bullets = []; enemies = []; particles = []; popups = []; rings = [];
+  seedAhead();
+}
+requestAnimationFrame(frame);
+
+/* show legends from title via key L */
+window.addEventListener('keydown', e=>{
+  if ((e.key === 'l' || e.key === 'L') && state !== ST.PLAYING) showBoard();
+});
+</script>
+</body>
+</html>
