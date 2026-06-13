@@ -72,7 +72,51 @@
    - Version badge visible in HUD and game-over
    ===================================================================== */
 
-const W = 720, H = 760, VERSION = 'v2.0';
+const W = 720, H = 760, VERSION = 'v2.1';
+
+/* difficulty presets — all difficulty-sensitive params live here */
+const DIFF_PRESETS = [
+  {
+    key:'small',  label:'SMALL',  sub:'take it easy',
+    col:'#00ff88', dimCol:'#00774a',
+    diffRate:0.06,   // how fast sectorN scales up difficulty
+    spawnBase:280,   // base ms between spawns
+    waveAmp:22,      // how much the wave oscillation pushes spawn density
+    fuelDrain:1.4,   // fuel/sec multiplier
+    tankerSect:4,    // sector tankers first appear
+    heliFireSect:6,  // sector helis start shooting
+    jetSect:4,       // sector jets first appear
+    scoreBonus:1.0,  // score multiplier
+    tip:'Slow progression · Gentle enemies · Classic fun',
+  },
+  {
+    key:'medium', label:'MEDIUM', sub:'the real raid',
+    col:'#ffe000', dimCol:'#7a6a00',
+    diffRate:0.14,
+    spawnBase:200,
+    waveAmp:55,
+    fuelDrain:2.0,
+    tankerSect:2,
+    heliFireSect:3,
+    jetSect:2,
+    scoreBonus:1.5,
+    tip:'Classic challenge · Balanced · Score ×1.5',
+  },
+  {
+    key:'hard',   label:'HARD',   sub:'no mercy',
+    col:'#ff2244', dimCol:'#7a0022',
+    diffRate:0.22,
+    spawnBase:140,
+    waveAmp:78,
+    fuelDrain:2.7,
+    tankerSect:1,
+    heliFireSect:2,
+    jetSect:1,
+    scoreBonus:2.0,
+    tip:'Relentless · Fast enemies · Score ×2',
+  },
+];
+let activePreset = DIFF_PRESETS[1]; // default medium
 const SECTOR   = 3800;
 const BRIDGE_W = 520;
 const PLAYER_Y = H - 130;
@@ -206,7 +250,7 @@ function roundRect(x,y,w,h,r){
 }
 
 /* ── game state ── */
-const ST={TITLE:0,PLAYING:1,DYING:2,GAMEOVER:3};
+const ST={TITLE:0,PLAYING:1,DYING:2,GAMEOVER:3,SELECT:4};
 let state,camY,spawnWy,nextBridgeK;
 let score,lives,sectorN,fuel;
 let player,bullets,enemies,enemyBullets,particles,popups,rings;
@@ -226,12 +270,14 @@ function resetRun(){
 }
 
 /* ── difficulty ── */
-function diffScale(){ return Math.min(1,(sectorN-1)*0.14); }
+function diffScale(){
+  return Math.min(1,(sectorN-1)*activePreset.diffRate);
+}
 function waveIntensity(){ return 0.5+0.5*Math.sin(camY*0.00042+sectorN*2.1); }
 function spawnGap(){
-  const base=Math.max(70,200-sectorN*22);
-  const wave=waveIntensity()*55;
-  return Math.max(55,base-wave);
+  const base=Math.max(70,activePreset.spawnBase-sectorN*18);
+  const wave=waveIntensity()*activePreset.waveAmp;
+  return Math.max(50,base-wave);
 }
 
 /* ── seeding ── */
@@ -260,7 +306,7 @@ function advanceSpawner(){
     const spd=rnd(55,100+70*diff)*(1+wave*0.4);
     enemies.push({type:'heli',wy:spawnWy,x,w:46,h:24,
       vx:(Math.random()<.5?-1:1)*spd,rotor:Math.random()*7,
-      fireTimer:sectorN>=3?rnd(3,6):Infinity});
+      fireTimer:sectorN>=activePreset.heliFireSect?rnd(3,6):Infinity});
     return;
   }
   if(r<0.13+0.27+0.25+diff*0.12){
@@ -268,8 +314,8 @@ function advanceSpawner(){
       vx:(Math.random()<.5?-1:1)*rnd(18,40+28*diff)});
     return;
   }
-  // bank tankers (sector 2+)
-  if(sectorN>=2){
+  // bank tankers
+  if(sectorN>=activePreset.tankerSect){
     const leftW=rv.l, rightW=W-rv.r;
     const tankerHp=1+Math.min(3,Math.floor(diff*2.5));
     const tankerVal=120+sectorN*40;
@@ -288,7 +334,7 @@ function advanceSpawner(){
 }
 
 function maybeSpawnJet(dt){
-  if(sectorN<2) return;
+  if(sectorN<activePreset.jetSect) return;
   jetTimer-=dt;
   if(jetTimer<=0){
     jetTimer=Math.max(2.5,rnd(4,10)-sectorN*0.5);
@@ -326,7 +372,11 @@ function explode(x,y,col,n=28,big=false){
   shake=Math.min(16,shake+(big?13:7));
 }
 function popup(x,y,txt,col){ popups.push({x,y,txt,col,t:0,life:0.95}); }
-function addScore(v,x,y,col){ score+=v; popup(x,y,'+'+v,col); }
+function addScore(v,x,y,col){
+  const pts=Math.round(v*activePreset.scoreBonus);
+  score+=pts;
+  popup(x,y,'+'+pts,col);
+}
 
 /* ── input ── */
 const keys={};
@@ -335,8 +385,14 @@ window.addEventListener('keydown',e=>{
   keys[e.key.toLowerCase()]=true;
   if(e.key==='m'||e.key==='M') toggleMute();
   if((e.key==='p'||e.key==='P')&&state===ST.PLAYING) paused=!paused;
-  if(state===ST.TITLE&&(e.key==='Enter'||e.key===' ')) startGame();
-  if(state===ST.GAMEOVER&&e.key==='Enter'&&!overlayOpen()) startGame();
+  if(state===ST.TITLE&&(e.key==='Enter'||e.key===' ')) openSelect();
+  if(state===ST.SELECT){
+    if(e.key==='1') startGame(0);
+    if(e.key==='2') startGame(1);
+    if(e.key==='3') startGame(2);
+    if(e.key==='Escape') state=ST.TITLE;
+  }
+  if(state===ST.GAMEOVER&&e.key==='Enter'&&!overlayOpen()) openSelect();
   if((e.key==='l'||e.key==='L')&&state!==ST.PLAYING) showBoard();
 });
 window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
@@ -344,8 +400,16 @@ let touch={active:false,x:W/2,y:PLAYER_Y,fire:false};
 canvas.addEventListener('pointerdown',e=>{
   SFX.init(); SFX.resume();
   const p=toGame(e);
-  if(state===ST.TITLE){startGame();return;}
-  if(state===ST.GAMEOVER&&!overlayOpen()){startGame();return;}
+  if(state===ST.TITLE){openSelect();return;}
+  if(state===ST.GAMEOVER&&!overlayOpen()){openSelect();return;}
+  if(state===ST.SELECT){
+    // card tap detection: 3 cards centred at W/6, W/2, W*5/6, height 200-540
+    if(p.y>195&&p.y<545){
+      const idx=Math.floor(p.x/(W/3));
+      if(idx>=0&&idx<=2) startGame(idx);
+    }
+    return;
+  }
   touch.active=true; touch.fire=true; touch.x=p.x; touch.y=p.y;
 });
 canvas.addEventListener('pointermove',e=>{ if(!touch.active) return; const p=toGame(e); touch.x=p.x; touch.y=p.y; });
@@ -385,9 +449,14 @@ function showBoard(hlName,hlScore){
 }
 
 /* ── flow ── */
-function startGame(){
-  SFX.init(); SFX.resume(); SFX.engineStart();
+function openSelect(){
+  SFX.init(); SFX.resume();
   nameOverlay.style.display='none'; boardOverlay.style.display='none';
+  state=ST.SELECT;
+}
+function startGame(presetIdx){
+  activePreset=DIFF_PRESETS[presetIdx!=null?presetIdx:1];
+  SFX.engineStart();
   resetRun(); state=ST.PLAYING;
 }
 function loseLife(){
@@ -421,7 +490,7 @@ function respawnOrEnd(){
 /* ── update ── */
 function update(dt){
   titleT+=dt;
-  if(state===ST.TITLE||state===ST.GAMEOVER){
+  if(state===ST.TITLE||state===ST.GAMEOVER||state===ST.SELECT){
     camY+=65*dt; seedAhead(); updateFx(dt); return;
   }
   if(state===ST.DYING){
@@ -463,7 +532,7 @@ function update(dt){
   maybeSpawnFruit(dt);
 
   /* fuel */
-  fuel-=dt*2.0*(player.speed/SPD_DEF);
+  fuel-=dt*activePreset.fuelDrain*(player.speed/SPD_DEF);
   if(fuel<28){ lowFuelBeep-=dt; if(lowFuelBeep<=0){SFX.warn();lowFuelBeep=0.52;} }
   if(fuel<=0){ fuel=0; loseLife(); return; }
 
@@ -511,7 +580,7 @@ function update(dt){
       const rv=riverAt(e.wy);
       if(e.x<rv.l+28){e.x=rv.l+28;e.vx=Math.abs(e.vx);}
       if(e.x>rv.r-28){e.x=rv.r-28;e.vx=-Math.abs(e.vx);}
-      if(sectorN>=3&&e.fireTimer!==Infinity){
+      if(sectorN>=activePreset.heliFireSect&&e.fireTimer!==Infinity){
         e.fireTimer-=dt;
         if(e.fireTimer<=0&&sy>30&&sy<H-60){
           e.fireTimer=Math.max(1.0,rnd(2.2,4.5)-sectorN*0.28);
@@ -784,6 +853,7 @@ function draw(){
   if(state===ST.PLAYING||state===ST.DYING) drawHUD();
   if(banner) drawBanner();
   if(state===ST.TITLE)    drawTitle();
+  if(state===ST.SELECT)   drawDiffSelect();
   if(state===ST.GAMEOVER) drawGameOver();
   if(paused&&state===ST.PLAYING) drawPaused();
 
@@ -977,9 +1047,10 @@ function drawHUD(){
     ctx.fillStyle='#ff2244'; ctx.shadowColor='#ff2244'; ctx.shadowBlur=12;
     ctx.fillText('▲ LOW FUEL — FLY OVER DEPOT ▲',W/2,by-24); ctx.shadowBlur=0;
   }
-  // version badge
+  // version + mode badge
   ctx.textAlign='left'; ctx.font='11px "Courier New"';
-  ctx.fillStyle='rgba(0,255,255,.38)'; ctx.fillText('NEON RAID '+VERSION,10,H-10);
+  ctx.fillStyle=activePreset.col+'99';
+  ctx.fillText('NEON RAID '+VERSION+'  ['+activePreset.label+']',10,H-10);
   ctx.restore();
 }
 
@@ -1001,6 +1072,96 @@ function neonText(txt,x,y,size,col,blur=20){
   ctx.shadowBlur=0;
 }
 
+/* ── difficulty select screen ── */
+function drawDiffSelect(){
+  ctx.save();
+  ctx.fillStyle='rgba(3,1,14,.80)'; ctx.fillRect(0,0,W,H);
+
+  neonText('CHOOSE YOUR MISSION',W/2,110,30,'#00ffff',22);
+  neonText('press  1 · 2 · 3  or tap a card',W/2,148,14,'#88aacc',7);
+
+  const cardW=194, cardH=330, gap=16;
+  const startX=(W-(cardW*3+gap*2))/2;
+
+  DIFF_PRESETS.forEach((p,i)=>{
+    const cx=startX+i*(cardW+gap);
+    const cy=190;
+    const hover=false; // no hover state needed on canvas
+
+    // card bg
+    ctx.save();
+    ctx.shadowColor=p.col; ctx.shadowBlur=28;
+    ctx.fillStyle='rgba(8,4,28,.92)';
+    roundRect(cx,cy,cardW,cardH,14); ctx.fill();
+    ctx.strokeStyle=p.col; ctx.lineWidth=2.5;
+    roundRect(cx,cy,cardW,cardH,14); ctx.stroke();
+    ctx.restore();
+
+    // inner gradient stripe at top
+    const gt=ctx.createLinearGradient(cx,cy,cx,cy+60);
+    gt.addColorStop(0,p.col+'55'); gt.addColorStop(1,'transparent');
+    ctx.fillStyle=gt;
+    roundRect(cx,cy,cardW,60,14); ctx.fill();
+
+    const mx=cx+cardW/2;
+
+    // key number
+    ctx.save();
+    ctx.shadowColor=p.col; ctx.shadowBlur=16;
+    ctx.font='bold 20px "Courier New"'; ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.fillText('[ '+(i+1)+' ]',mx,cy+32);
+    ctx.restore();
+
+    // label
+    ctx.save();
+    ctx.shadowColor=p.col; ctx.shadowBlur=22;
+    ctx.font='bold 36px "Courier New"'; ctx.textAlign='center';
+    ctx.fillStyle=p.col;
+    ctx.fillText(p.label,mx,cy+100);
+    ctx.restore();
+
+    // sub
+    ctx.font='italic 13px "Courier New"'; ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,255,255,0.55)';
+    ctx.fillText(p.sub,mx,cy+124);
+
+    // divider
+    ctx.strokeStyle=p.col+'66'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(cx+18,cy+140); ctx.lineTo(cx+cardW-18,cy+140); ctx.stroke();
+
+    // stats
+    const stats=[
+      ['DIFFICULTY',  ['GENTLE','MODERATE','BRUTAL'][i]],
+      ['ENEMIES',     ['SPARSE','BALANCED','DENSE'][i]],
+      ['FUEL DRAIN',  ['SLOW','NORMAL','FAST'][i]],
+      ['SCORE',       ['×1.0','×1.5','×2.0'][i]],
+      ['TANKERS',     ['SECTOR '+p.tankerSect+'+','SECTOR '+p.tankerSect+'+','SECTOR 1'][i]],
+    ];
+    stats.forEach(([k,v],si)=>{
+      const sy=cy+162+si*30;
+      ctx.textAlign='left'; ctx.font='10px "Courier New"'; ctx.fillStyle='rgba(180,220,255,0.55)';
+      ctx.fillText(k,cx+16,sy);
+      ctx.textAlign='right'; ctx.font='bold 12px "Courier New"'; ctx.fillStyle=p.col;
+      ctx.shadowColor=p.col; ctx.shadowBlur=6;
+      ctx.fillText(v,cx+cardW-16,sy);
+      ctx.shadowBlur=0;
+    });
+
+    // tip
+    ctx.textAlign='center'; ctx.font='11px "Courier New"';
+    ctx.fillStyle='rgba(255,255,255,0.38)';
+    const tipWords=p.tip.split(' · ');
+    tipWords.forEach((w,wi)=>ctx.fillText(w,mx,cy+cardH-38+wi*15));
+  });
+
+  // footer
+  ctx.textAlign='center'; ctx.font='12px "Courier New"';
+  ctx.fillStyle='rgba(100,180,255,0.45)';
+  ctx.fillText('ESC to go back  ·  scores saved per mode',W/2,H-22);
+  ctx.restore();
+}
+
 /* ── title ── */
 function drawTitle(){
   ctx.save();
@@ -1012,7 +1173,7 @@ function drawTitle(){
   neonText('a tribute to the 1982 river classic',W/2,316+bob,13,'#88ccff',6);
   drawPlayer(W/2,388+bob*.45,Math.sin(titleT*1.2)*160,250);
   if(Math.floor(titleT*1.7)%2===0)
-    neonText('TAP  OR  PRESS  ENTER  TO  FLY',W/2,460,19,'#ffe000',16);
+    neonText('TAP OR PRESS ENTER TO CHOOSE MODE',W/2,460,19,'#ffe000',16);
   ctx.font='13px "Courier New"'; ctx.fillStyle='#aaddff'; ctx.textAlign='center';
   const ctrl=[
     '◄ ► / A D ............ steer',
@@ -1039,11 +1200,11 @@ function drawGameOver(){
   ctx.fillStyle='rgba(3,1,14,.65)'; ctx.fillRect(0,0,W,H);
   neonText('MISSION OVER',W/2,258,48,'#ff2244',30);
   neonText('SCORE  '+score.toLocaleString(),W/2,328,30,'#efffff',14);
-  neonText('SECTOR '+sectorN,W/2,368,18,'#88ccff',8);
+  neonText('SECTOR '+sectorN+'   MODE: '+activePreset.label,W/2,368,16,'#88ccff',8);
   if(score>=hiScore()&&score>0)
     neonText('★  NEW HIGH SCORE  ★',W/2,414,22,'#ffe000',20);
   if(!overlayOpen()&&Math.floor(titleT*1.8)%2===0)
-    neonText('TAP OR PRESS ENTER TO RETRY',W/2,472,18,'#00ff88',14);
+    neonText('TAP OR PRESS ENTER TO CHOOSE MODE',W/2,472,16,'#00ff88',12);
   neonText('NEON RAID '+VERSION,W/2,H-20,12,'rgba(0,255,255,.45)',4);
   ctx.restore();
 }
