@@ -72,7 +72,7 @@
    - Version badge visible in HUD and game-over
    ===================================================================== */
 
-const W = 720, H = 760, VERSION = 'v2.3';
+const W = 720, H = 760, VERSION = 'v2.4';
 
 /* difficulty presets — all difficulty-sensitive params live here */
 const DIFF_PRESETS = [
@@ -130,7 +130,24 @@ const SECTOR_PALETTES=[
 ];
 function sectorPal(){ return SECTOR_PALETTES[(sectorN-1)%SECTOR_PALETTES.length]; }
 const BRIDGE_W = 520;     // bridges pinch slightly narrower than the open river
-const BANK = 80;          // px reserved on each shore — just enough for a 54px tanker
+/* ── bank-width A/B test ──────────────────────────────────────────────
+   BANK = px reserved on each shore. Smaller bank → broader river (less
+   lateral room), larger bank → narrower river + roomier shores. Press B
+   on the title / select screen to cycle and compare the feel.            */
+const BANK_PRESETS = [
+  {label:'BROADEST RIVER', bank:55},   // thin shores, maximal channel
+  {label:'BROAD RIVER',    bank:80},   // the v2.3 feel
+  {label:'WIDE BANKS',     bank:120},  // narrower channel, roomy shores
+];
+const LS_BANK = 'neonRaidV2_bank';
+let bankIdx = 0;
+try{ const v=parseInt(localStorage.getItem(LS_BANK)); if(v>=0&&v<BANK_PRESETS.length) bankIdx=v; }catch(e){}
+let BANK = BANK_PRESETS[bankIdx].bank;
+function cycleBank(){
+  bankIdx=(bankIdx+1)%BANK_PRESETS.length;
+  BANK=BANK_PRESETS[bankIdx].bank;
+  try{ localStorage.setItem(LS_BANK,bankIdx); }catch(e){}
+}
 const PLAYER_Y = H - 130;
 
 /* canvas */
@@ -277,12 +294,14 @@ function riverAt(wy){
     Math.sin(wy*0.0005+3.9)*0.48
   )*70;
   // broad river: high floor, gentle variation, capped so BANK px stay on each shore
-  const maxWidth=W-BANK*2;                 // 720 - 160 = 560 widest
+  const maxWidth=W-BANK*2;                 // widest channel for current bank setting
+  const floor=Math.min(465,maxWidth);      // floor can't exceed the cap
+  const bridgeW=Math.min(BRIDGE_W,maxWidth);
   let width=525+Math.sin(wy*0.0017+2.0)*22+Math.sin(wy*0.0008)*14;
   width-=Math.min(45,sector*6);            // tighten slightly as sectors climb
-  width=Math.max(465,Math.min(maxWidth,width));
+  width=Math.max(floor,Math.min(maxWidth,width));
   let center=W/2+f*wander;
-  width=BRIDGE_W+(width-BRIDGE_W)*f;
+  width=bridgeW+(width-bridgeW)*f;
   const half=width/2;
   center=Math.max(BANK+half,Math.min(W-BANK-half,center));
   return {l:center-half,r:center+half};
@@ -472,6 +491,7 @@ window.addEventListener('keydown',e=>{
   if(state===ST.GAMEOVER&&e.key==='Enter'&&!overlayOpen()) openSelect();
   if((e.key==='r'||e.key==='R')&&!overlayOpen()&&state!==ST.TITLE) openSelect();
   if((e.key==='q'||e.key==='Q')&&!overlayOpen()){SFX.engineStop();godMode=0;state=ST.TITLE;}
+  if((e.key==='b'||e.key==='B')&&!overlayOpen()&&state!==ST.PLAYING){cycleBank();SFX.bumperPop&&SFX.bumperPop();}
   if((e.key==='l'||e.key==='L')&&state!==ST.PLAYING) showBoard(activePreset.key);
 });
 window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
@@ -1538,8 +1558,15 @@ function drawDiffSelect(){
     tipWords.forEach((w,wi)=>ctx.fillText(w,mx,cy+cardH-38+wi*15));
   });
 
+  // bank-width A/B toggle indicator
+  ctx.textAlign='center';
+  ctx.font='bold 13px "Courier New"';
+  ctx.fillStyle='rgba(255,210,90,0.9)'; ctx.shadowColor='#ffcc44'; ctx.shadowBlur=8;
+  ctx.fillText('RIVER:  '+BANK_PRESETS[bankIdx].label+'   ·   press  B  to switch  (A/B test)',W/2,H-46);
+  ctx.shadowBlur=0;
+
   // footer
-  ctx.textAlign='center'; ctx.font='12px "Courier New"';
+  ctx.font='12px "Courier New"';
   ctx.fillStyle='rgba(100,180,255,0.45)';
   ctx.fillText('ESC to go back  ·  scores saved per mode',W/2,H-22);
   ctx.restore();
@@ -1567,7 +1594,7 @@ function drawTitle(){
     'TANKERS on banks ..... 1-4 hits to destroy',
     'destroy BRIDGES ...... clear sector + fuel',
     'M = mute  ·  P = pause  ·  L = legends',
-    'R = restart  ·  Q = quit to title',
+    'R = restart  ·  Q = quit  ·  B = river width',
     '⚡ GOD FUEL (violet) ..... 3s god mode!',
     '↗ SPREAD SHOT (cyan) .... 6s multi-directional fire',
     '🛡 BUMPERS on bends ..... bounce instead of crash',
