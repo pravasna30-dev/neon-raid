@@ -188,6 +188,20 @@ const SFX = {
   warn(){ this.env('square',240,240,0.09,0.11); },
   sectorFanfare(){ [523,659,784,1047,1319].forEach((f,i)=>this.env('triangle',f,f,0.16,0.20,i*0.08)); },
   gameOver(){ [392,330,262,196,130].forEach((f,i)=>this.env('sawtooth',f,f*0.96,0.28,0.18,i*0.21)); },
+  godModeStart(){
+    if(!this.ac||this.muted) return;
+    [330,415,523,659,831,1047,1319,1047,784,523].forEach((f,i)=>{
+      this.env('triangle',f,f+18,0.22,0.22,i*0.26);
+      this.env('sine',f*2,f*2,0.12,0.07,i*0.26+0.06);
+    });
+    this.env('sine',1400,1400,2.4,0.06,0.5);
+  },
+  godModeEnd(){
+    if(!this.ac||this.muted) return;
+    [1047,784,523,330,220].forEach((f,i)=>this.env('sawtooth',f,f*0.72,0.24,0.16,i*0.12));
+    this.noise(0.36,0.28,900);
+  },
+  bumperPop(){ this.env('sine',280,560,0.10,0.14); },
   engineStart(){
     if(!this.ac||this.engineOsc) return;
     this.engineOsc=this.ac.createOscillator();
@@ -275,7 +289,7 @@ let state,camY,spawnWy,nextBridgeK;
 let score,lives,sectorN,fuel;
 let player,bullets,enemies,enemyBullets,particles,popups,rings;
 let shake,dieTimer,invuln,fireCd,banner,lowFuelBeep;
-let jetTimer,fruitTimer,paused,tPrev=0,titleT=0;
+let jetTimer,fruitTimer,paused,tPrev=0,titleT=0,godMode=0;
 
 function newPlayer(){ return {x:W/2,vx:0,speed:250,w:32,h:40}; }
 function resetRun(){
@@ -283,7 +297,7 @@ function resetRun(){
   score=0; lives=3; sectorN=1; fuel=100;
   player=newPlayer();
   bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; popups=[]; rings=[];
-  shake=0; invuln=2; fireCd=0; banner=null; lowFuelBeep=0;
+  shake=0; invuln=2; fireCd=0; banner=null; lowFuelBeep=0; godMode=0;
   jetTimer=5; fruitTimer=rnd(8,16);
   paused=false;
   seedAhead();
@@ -319,7 +333,9 @@ function advanceSpawner(){
   const x=rnd(rv.l+margin,rv.r-margin);
   const r=Math.random();
   if(r<0.13){
-    enemies.push({type:'fuel',wy:spawnWy,x,w:32,h:58});
+    enemies.push(Math.random()<0.14&&sectorN>=2
+      ?{type:'godFuel',wy:spawnWy,x,w:32,h:58}
+      :{type:'fuel',wy:spawnWy,x,w:32,h:58});
     return;
   }
   if(r<0.13+0.27+diff*0.10){
@@ -351,6 +367,13 @@ function advanceSpawner(){
         fireTimer:rnd(fireBase*0.6,fireBase*1.4),val:tankerVal,hit:0});
     }
   }
+  /* rubber bumpers on sharp river bends */
+  const rvA=riverAt(spawnWy+110),rvB=riverAt(spawnWy-110);
+  const leftRate=rvA.l-rvB.l, rightRate=rvB.r-rvA.r;
+  if(leftRate>18&&rv.l>28&&Math.random()<0.55)
+    enemies.push({type:'bumper',wy:spawnWy,side:'left',x:rv.l,r:14,bounceT:0});
+  if(rightRate>18&&W-rv.r>28&&Math.random()<0.55)
+    enemies.push({type:'bumper',wy:spawnWy,side:'right',x:rv.r,r:14,bounceT:0});
 }
 
 function maybeSpawnJet(dt){
@@ -413,6 +436,8 @@ window.addEventListener('keydown',e=>{
     if(e.key==='Escape') state=ST.TITLE;
   }
   if(state===ST.GAMEOVER&&e.key==='Enter'&&!overlayOpen()) openSelect();
+  if((e.key==='r'||e.key==='R')&&!overlayOpen()&&state!==ST.TITLE) openSelect();
+  if((e.key==='q'||e.key==='Q')&&!overlayOpen()){SFX.engineStop();godMode=0;state=ST.TITLE;}
   if((e.key==='l'||e.key==='L')&&state!==ST.PLAYING) showBoard(activePreset.key);
 });
 window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
@@ -525,7 +550,8 @@ function loseLife(){
 function respawnOrEnd(){
   if(lives<=0){
     state=ST.GAMEOVER; SFX.engineSet(0); SFX.gameOver();
-    if(score>0&&(legends.length<10||score>legends[legends.length-1].score)){
+    const _l=loadLegendsFor(activePreset.key);
+    if(score>0&&(_l.length<10||score>_l[_l.length-1].score)){
       document.getElementById('finalScore').textContent=score.toLocaleString();
       nameInput.value=''; nameOverlay.style.display='flex';
       setTimeout(()=>nameInput.focus(),60);
@@ -593,6 +619,9 @@ function update(dt){
   if(fuel<28){ lowFuelBeep-=dt; if(lowFuelBeep<=0){SFX.warn();lowFuelBeep=0.52;} }
   if(fuel<=0){ fuel=0; loseLife(); return; }
 
+  /* god mode countdown */
+  if(godMode>0){ godMode-=dt; if(godMode<=0){godMode=0;SFX.godModeEnd();} }
+
   /* player bullets */
   fireCd-=dt;
   if(fire&&fireCd<=0){
@@ -630,6 +659,9 @@ function update(dt){
     const e=enemies[i];
     const sy=PLAYER_Y-(e.wy-camY);
     if(e.type!=='fruit'&&sy>H+170){enemies.splice(i,1);continue;}
+
+    /* bumpers: just tick bounceT, no collision handled here */
+    if(e.type==='bumper'){if(e.bounceT>0)e.bounceT-=dt;continue;}
 
     /* type-specific movement/behavior */
     if(e.type==='heli'){
@@ -706,6 +738,13 @@ function update(dt){
         enemies.splice(i,1); destroyed=true;
         SFX.boom(); explode(e.x,sy,'#ffe000',28,true);
         addScore(80,e.x,sy-18,'#ffe000');
+      } else if(e.type==='godFuel'){
+        enemies.splice(i,1); destroyed=true;
+        godMode=3.5; invuln=Math.max(invuln,3.5);
+        SFX.godModeStart();
+        explode(e.x,sy,'#ffffff',44,true); explode(e.x,sy,'#8800ff',22,false);
+        addScore(300,e.x,sy-28,'#cc88ff');
+        banner={txt:'⚡ GOD MODE ACTIVATED ⚡',t:0,life:2.4};
       } else if(e.type==='fruit'){
         enemies.splice(i,1); destroyed=true;
         SFX.fruitPop(); explode(e.x,sy,e.fd.col,22,false);
@@ -738,11 +777,39 @@ function update(dt){
     }
     if(e.type==='bridge'){ if(Math.abs(PLAYER_Y-sy)<15+player.h/2){loseLife();return;} continue; }
     if(e.type==='tanker'||e.type==='fruit') continue;
+    if(e.type==='godFuel'){
+      if(Math.abs(player.x-e.x)<(e.w+player.w)/2&&Math.abs(PLAYER_Y-sy)<(e.h+player.h)/2){
+        enemies.splice(i,1);
+        godMode=3.5; invuln=Math.max(invuln,3.5);
+        SFX.godModeStart();
+        explode(e.x,sy,'#ffffff',36,true); explode(e.x,sy,'#8800ff',18,false);
+        banner={txt:'⚡ GOD MODE — 3 SECONDS! ⚡',t:0,life:2.4};
+        popup(e.x,sy-42,'⚡ GOD MODE!','#ee99ff');
+      }
+      continue;
+    }
     if(Math.abs(player.x-e.x)<(e.w+player.w)/2-5&&Math.abs(PLAYER_Y-sy)<(e.h+player.h)/2-2){
       enemies.splice(i,1); explode(e.x,sy,'#ff6600',24); loseLife(); return;
     }
   }
 
+  /* bumper bounce — before bankCrash so a bumper saves you */
+  if(invuln<=0){
+    for(const e of enemies){
+      if(e.type!=='bumper') continue;
+      const bsy=PLAYER_Y-(e.wy-camY);
+      if(Math.abs(bsy-PLAYER_Y)>30) continue;
+      if(Math.abs(player.x-e.x)<e.r+16){
+        player.vx=(e.side==='left'?1:-1)*500;
+        const bRv=riverAt(e.wy);
+        if(e.side==='left') player.x=Math.max(player.x,bRv.l+24);
+        else                player.x=Math.min(player.x,bRv.r-24);
+        if(e.bounceT<=0) SFX.bumperPop();
+        e.bounceT=0.45; shake=Math.min(shake+3,7);
+        break;
+      }
+    }
+  }
   /* bank crash */
   if(invuln<=0&&bankCrash()){loseLife();return;}
   invuln-=dt;
@@ -856,7 +923,9 @@ function draw(){
     else if(e.type==='jet')    drawJet(e,sy);
     else if(e.type==='tanker') drawTanker(e,sy);
     else if(e.type==='fruit')  drawFruit(e,sy);
-    else if(e.type==='bridge') drawBridge(sy,e);
+    else if(e.type==='bridge')   drawBridge(sy,e);
+    else if(e.type==='godFuel')  drawGodFuel(e.x,sy);
+    else if(e.type==='bumper')   drawBumper(e,sy);
   }
 
   /* player bullets */
@@ -925,24 +994,97 @@ function draw(){
 function drawPlayer(x,y,vx,spd){
   const tilt=Math.max(-.32,Math.min(.32,vx/1100));
   ctx.save(); ctx.translate(x,y); ctx.rotate(tilt);
+  const isGod=godMode>0;
+  const gh=(titleT*300)%360;  // rotating rainbow hue
+  const bodyCol=isGod?`hsl(${(gh+180)%360},100%,82%)`:'#e8ffff';
+  const glowCol=isGod?`hsl(${gh},100%,65%)`:'#00ffff';
+  const flameCol=isGod?`hsl(${(gh+60)%360},100%,65%)`:'#ff00ff';
+
+  /* god mode aura ring */
+  if(isGod){
+    const pulse=0.5+0.5*Math.sin(titleT*14);
+    ctx.shadowColor=`hsl(${gh},100%,65%)`; ctx.shadowBlur=50;
+    ctx.strokeStyle=`hsl(${gh},100%,65%)`; ctx.lineWidth=3;
+    ctx.globalAlpha=0.55*pulse;
+    ctx.beginPath(); ctx.arc(0,0,30,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha=0.3*pulse;
+    ctx.beginPath(); ctx.arc(0,0,38,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
   const fl=12+Math.sin(titleT*44)*5+(spd-120)/24;
   ctx.save();
   const fg=ctx.createLinearGradient(0,16,0,16+fl);
-  fg.addColorStop(0,'#ff00ff'); fg.addColorStop(1,'rgba(255,80,255,0)');
-  ctx.shadowColor='#ff00ff'; ctx.shadowBlur=24; ctx.fillStyle=fg;
+  fg.addColorStop(0,flameCol); fg.addColorStop(1,isGod?`hsla(${(gh+60)%360},100%,65%,0)`:'rgba(255,80,255,0)');
+  ctx.shadowColor=flameCol; ctx.shadowBlur=isGod?34:24; ctx.fillStyle=fg;
   ctx.beginPath(); ctx.moveTo(-6,16); ctx.lineTo(0,16+fl); ctx.lineTo(6,16); ctx.closePath(); ctx.fill();
   ctx.restore();
-  ctx.shadowColor='#00ffff'; ctx.shadowBlur=24; ctx.fillStyle='#e8ffff';
+  ctx.shadowColor=glowCol; ctx.shadowBlur=isGod?34:24; ctx.fillStyle=bodyCol;
   ctx.beginPath();
   ctx.moveTo(0,-22); ctx.lineTo(7,-4); ctx.lineTo(18,10); ctx.lineTo(18,15);
   ctx.lineTo(6,12); ctx.lineTo(5,18); ctx.lineTo(-5,18); ctx.lineTo(-6,12);
   ctx.lineTo(-18,15); ctx.lineTo(-18,10); ctx.lineTo(-7,-4);
   ctx.closePath(); ctx.fill();
-  ctx.shadowBlur=0; ctx.fillStyle='#00ffff';
+  ctx.shadowBlur=0;
+  ctx.fillStyle=isGod?`hsl(${(gh+120)%360},100%,70%)`:'#00ffff';
   ctx.beginPath(); ctx.moveTo(0,-16); ctx.lineTo(3.5,-2); ctx.lineTo(-3.5,-2); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle='rgba(0,255,255,0.6)'; ctx.lineWidth=1.2;
+  ctx.strokeStyle=isGod?`hsl(${(gh+240)%360},100%,65%,0.7)`:'rgba(0,255,255,0.6)'; ctx.lineWidth=1.2;
   ctx.beginPath(); ctx.moveTo(6,8); ctx.lineTo(16,13); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(-6,8); ctx.lineTo(-16,13); ctx.stroke();
+  ctx.restore();
+}
+
+function drawGodFuel(x,sy){
+  ctx.save(); ctx.translate(x,sy);
+  const ph=(titleT*200)%360;
+  ctx.shadowColor=`hsl(${ph},100%,65%)`; ctx.shadowBlur=32;
+  ctx.fillStyle='#0a0018'; ctx.strokeStyle=`hsl(${ph},100%,65%)`; ctx.lineWidth=3;
+  roundRect(-16,-29,32,58,9); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur=16; ctx.fillStyle=`hsl(${(ph+120)%360},100%,75%)`;
+  ctx.font='bold 11px "Courier New"'; ctx.textAlign='center';
+  'GOD'.split('').forEach((ch,i)=>ctx.fillText(ch,0,-16+i*13));
+  ctx.fillStyle=`hsl(${(ph+240)%360},100%,75%)`;
+  ctx.fillText('⚡',0,22);
+  // corona sparkles
+  for(let s=0;s<6;s++){
+    const a=(s/6)*Math.PI*2+titleT*3;
+    const sr=20+Math.sin(titleT*8+s)*5;
+    ctx.globalAlpha=0.6;
+    ctx.fillStyle=`hsl(${(ph+s*60)%360},100%,75%)`;
+    ctx.beginPath(); ctx.arc(Math.cos(a)*sr,Math.sin(a)*sr,2.5,0,7); ctx.fill();
+  }
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+function drawBumper(e,sy){
+  ctx.save(); ctx.translate(e.x,sy);
+  const bounce=e.bounceT>0;
+  const extra=bounce?(Math.sin(e.bounceT/0.45*Math.PI)*6):0;
+  const r=e.r+extra;
+  ctx.shadowColor='#ff9900'; ctx.shadowBlur=bounce?32:14;
+  // semicircle pointing into the river
+  ctx.fillStyle='#331100';
+  ctx.beginPath();
+  if(e.side==='left'){
+    ctx.arc(0,0,r,-Math.PI/2,Math.PI/2,false); // right-facing D shape
+  } else {
+    ctx.arc(0,0,r,Math.PI/2,3*Math.PI/2,false); // left-facing D shape
+  }
+  ctx.closePath(); ctx.fill();
+  // bright rim
+  ctx.strokeStyle=bounce?'#ffee00':'#ffaa00'; ctx.lineWidth=2.5;
+  ctx.beginPath();
+  if(e.side==='left'){
+    ctx.arc(0,0,r,-Math.PI/2,Math.PI/2,false);
+  } else {
+    ctx.arc(0,0,r,Math.PI/2,3*Math.PI/2,false);
+  }
+  ctx.stroke();
+  // center bolt
+  ctx.shadowColor='#ffcc00'; ctx.shadowBlur=bounce?18:8;
+  ctx.fillStyle=bounce?'#ffee00':'#ff9900';
+  const bx=e.side==='left'?r*0.45:-r*0.45;
+  ctx.beginPath(); ctx.arc(bx,0,r*0.32,0,7); ctx.fill();
   ctx.restore();
 }
 
@@ -1104,6 +1246,17 @@ function drawHUD(){
     ctx.fillStyle='#ff2244'; ctx.shadowColor='#ff2244'; ctx.shadowBlur=12;
     ctx.fillText('▲ LOW FUEL — FLY OVER DEPOT ▲',W/2,by-24); ctx.shadowBlur=0;
   }
+  // god mode indicator
+  if(godMode>0){
+    const gh=(titleT*300)%360;
+    const flash=Math.floor(titleT*8)%2===0||godMode>0.8;
+    if(flash){
+      ctx.textAlign='center'; ctx.font='bold 18px "Courier New"';
+      ctx.fillStyle=`hsl(${gh},100%,75%)`; ctx.shadowColor=`hsl(${gh},100%,65%)`; ctx.shadowBlur=20;
+      ctx.fillText('⚡ GOD MODE ⚡  '+Math.ceil(godMode)+'s',W/2,H-62);
+    }
+    ctx.shadowBlur=0;
+  }
   // version + mode badge
   ctx.textAlign='left'; ctx.font='11px "Courier New"';
   ctx.fillStyle=activePreset.col+'99';
@@ -1241,6 +1394,9 @@ function drawTitle(){
     'TANKERS on banks ..... 1-4 hits to destroy',
     'destroy BRIDGES ...... clear sector + fuel',
     'M = mute  ·  P = pause  ·  L = legends',
+    'R = restart  ·  Q = quit to title',
+    '⚡ GOD FUEL (violet) ..... 3s invincibility!',
+    '🛡 BUMPERS on bends ..... bounce instead of crash',
   ];
   ctrl.forEach((l,i)=>ctx.fillText(l,W/2,498+i*22));
   const topL=getTopLegend();
