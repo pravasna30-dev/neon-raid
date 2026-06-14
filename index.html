@@ -72,7 +72,7 @@
    - Version badge visible in HUD and game-over
    ===================================================================== */
 
-const W = 720, H = 760, VERSION = 'v2.5';
+const W = 720, H = 760, VERSION = 'v2.6';
 
 /* difficulty presets — all difficulty-sensitive params live here */
 const DIFF_PRESETS = [
@@ -135,7 +135,7 @@ const BRIDGE_W = 520;     // bridges pinch slightly narrower than the open river
    lateral room), larger bank → narrower river + roomier shores. Press B
    on the title / select screen to cycle and compare the feel.            */
 const BANK_PRESETS = [
-  {label:'BROADEST (90%)', bank:36},   // ~648px river — no room for bank tankers
+  {label:'BROADEST (92%)', bank:28},   // ~664px river — no room for bank tankers
   {label:'BROAD RIVER',    bank:80},   // the v2.3 feel, tankers fit
   {label:'WIDE BANKS',     bank:120},  // narrower channel, roomy shores
 ];
@@ -231,6 +231,15 @@ const SFX = {
     this.noise(0.36,0.28,900);
   },
   bumperPop(){ this.env('sine',280,560,0.10,0.14); },
+  cloakOn(){
+    if(!this.ac||this.muted) return;
+    this.env('sine',1000,140,0.55,0.16); this.env('triangle',1500,420,0.45,0.10,0.05);
+    this.noise(0.32,0.12,1400);
+  },
+  cloakOff(){
+    if(!this.ac||this.muted) return;
+    this.env('sine',160,760,0.34,0.14); this.env('triangle',480,1200,0.30,0.09,0.04);
+  },
   engineStart(){
     if(!this.ac||this.engineOsc) return;
     this.engineOsc=this.ac.createOscillator();
@@ -297,8 +306,8 @@ function riverAt(wy){
   const maxWidth=W-BANK*2;                 // channel the current bank setting allows
   const bridgeW=Math.min(BRIDGE_W,maxWidth);
   // river FILLS the channel, minus a gentle meander + slow per-sector narrowing
-  const meander=(Math.sin(wy*0.0017+2.0)*0.5+Math.sin(wy*0.0008)*0.5+1)*16; // 0..32px
-  let width=maxWidth-6-meander-Math.min(40,sector*5);
+  const meander=(Math.sin(wy*0.0017+2.0)*0.5+Math.sin(wy*0.0008)*0.5+1)*10; // 0..20px
+  let width=maxWidth-4-meander-Math.min(26,sector*4);
   width=Math.min(maxWidth,Math.max(Math.min(360,maxWidth),width));
   let center=W/2+f*wander;
   width=bridgeW+(width-bridgeW)*f;
@@ -322,7 +331,7 @@ let state,camY,spawnWy,nextBridgeK;
 let score,lives,sectorN,fuel;
 let player,bullets,enemies,enemyBullets,particles,popups,rings;
 let shake,dieTimer,invuln,fireCd,banner,lowFuelBeep;
-let jetTimer,fruitTimer,paused,tPrev=0,titleT=0,godMode=0,spreadMode=0;
+let jetTimer,fruitTimer,paused,tPrev=0,titleT=0,godMode=0,spreadMode=0,cloak=0;
 let clouds=[],birds=[],birdTimer=4;   // ambient sky decoration
 
 function newPlayer(){ return {x:W/2,vx:0,speed:250,w:32,h:40}; }
@@ -331,7 +340,7 @@ function resetRun(){
   score=0; lives=3; sectorN=1; fuel=100;
   player=newPlayer();
   bullets=[]; enemies=[]; enemyBullets=[]; particles=[]; popups=[]; rings=[];
-  shake=0; invuln=2; fireCd=0; banner=null; lowFuelBeep=0; godMode=0; spreadMode=0;
+  shake=0; invuln=2; fireCd=0; banner=null; lowFuelBeep=0; godMode=0; spreadMode=0; cloak=0;
   jetTimer=5; fruitTimer=rnd(8,16);
   birds=[]; birdTimer=rnd(3,7); initClouds();
   paused=false;
@@ -377,6 +386,11 @@ function advanceSpawner(){
   if(r<0.136&&sectorN>=2){
     /* spread-shot power-up (rare) */
     enemies.push({type:'spreadPU',wy:spawnWy,x,w:34,h:34});
+    return;
+  }
+  if(r<0.150&&sectorN>=2){
+    /* cloak power-up (rare) — temporary stealth */
+    enemies.push({type:'cloakFuel',wy:spawnWy,x,w:32,h:58});
     return;
   }
   if(r<0.40+diff*0.10){
@@ -425,10 +439,10 @@ function advanceSpawner(){
   /* rubber bumpers on sharp river bends */
   const rvA=riverAt(spawnWy+110),rvB=riverAt(spawnWy-110);
   const leftRate=rvA.l-rvB.l, rightRate=rvB.r-rvA.r;
-  if(leftRate>18&&rv.l>28&&Math.random()<0.55)
-    enemies.push({type:'bumper',wy:spawnWy,side:'left',x:rv.l,r:14,bounceT:0});
-  if(rightRate>18&&W-rv.r>28&&Math.random()<0.55)
-    enemies.push({type:'bumper',wy:spawnWy,side:'right',x:rv.r,r:14,bounceT:0});
+  if(leftRate>11&&rv.l>20&&Math.random()<0.55)
+    enemies.push({type:'bumper',wy:spawnWy,side:'left',x:rv.l,r:42,bounceT:0});
+  if(rightRate>11&&W-rv.r>20&&Math.random()<0.55)
+    enemies.push({type:'bumper',wy:spawnWy,side:'right',x:rv.r,r:42,bounceT:0});
 }
 
 function maybeSpawnJet(dt){
@@ -682,6 +696,9 @@ function update(dt){
   /* spread shot timer */
   if(spreadMode>0){ spreadMode-=dt; if(spreadMode<0) spreadMode=0; }
 
+  /* cloak (stealth) timer */
+  if(cloak>0){ cloak-=dt; if(cloak<=0){cloak=0;SFX.cloakOff();} }
+
   /* player bullets */
   fireCd-=dt;
   if(fire&&fireCd<=0){
@@ -833,6 +850,13 @@ function update(dt){
         explode(e.x,sy,'#00ffff',28,false); explode(e.x,sy,'#ff00ff',18,false);
         banner={txt:'↗ SPREAD SHOT ACTIVATED — 6s ↙',t:0,life:2.2};
         popup(e.x,sy-36,'SPREAD SHOT!','#00ffff');
+      } else if(e.type==='cloakFuel'){
+        enemies.splice(i,1); destroyed=true;
+        cloak=7; SFX.cloakOn();
+        explode(e.x,sy,'#9fd0ff',26,false); explode(e.x,sy,'#ffffff',14,false);
+        addScore(150,e.x,sy-28,'#bfe4ff');
+        banner={txt:'👻 CLOAK ENGAGED — 7s STEALTH 👻',t:0,life:2.4};
+        popup(e.x,sy-44,'CLOAK!','#bfe4ff');
       } else if(e.type==='fuel'){
         enemies.splice(i,1); destroyed=true;
         SFX.boom(); explode(e.x,sy,'#ffe000',28,true);
@@ -903,6 +927,16 @@ function update(dt){
       }
       continue;
     }
+    if(e.type==='cloakFuel'){
+      if(Math.abs(player.x-e.x)<(e.w+player.w)/2&&Math.abs(PLAYER_Y-sy)<(e.h+player.h)/2){
+        enemies.splice(i,1);
+        cloak=7; SFX.cloakOn();
+        explode(e.x,sy,'#9fd0ff',24,false); explode(e.x,sy,'#ffffff',12,false);
+        banner={txt:'👻 CLOAK ENGAGED — 7s STEALTH 👻',t:0,life:2.4};
+        popup(e.x,sy-44,'CLOAK!','#bfe4ff');
+      }
+      continue;
+    }
     if(Math.abs(player.x-e.x)<(e.w+player.w)/2-5&&Math.abs(PLAYER_Y-sy)<(e.h+player.h)/2-2){
       enemies.splice(i,1); explode(e.x,sy,'#ff6600',24); loseLife(); return;
     }
@@ -913,12 +947,12 @@ function update(dt){
     for(const e of enemies){
       if(e.type!=='bumper') continue;
       const bsy=PLAYER_Y-(e.wy-camY);
-      if(Math.abs(bsy-PLAYER_Y)>30) continue;
+      if(Math.abs(bsy-PLAYER_Y)>e.r*0.7+10) continue;
       if(Math.abs(player.x-e.x)<e.r+16){
-        player.vx=(e.side==='left'?1:-1)*500;
+        player.vx=(e.side==='left'?1:-1)*560;
         const bRv=riverAt(e.wy);
-        if(e.side==='left') player.x=Math.max(player.x,bRv.l+24);
-        else                player.x=Math.min(player.x,bRv.r-24);
+        if(e.side==='left') player.x=Math.max(player.x,bRv.l+e.r+12);
+        else                player.x=Math.min(player.x,bRv.r-e.r-12);
         if(e.bounceT<=0) SFX.bumperPop();
         e.bounceT=0.45; shake=Math.min(shake+3,7);
         break;
@@ -932,6 +966,7 @@ function update(dt){
 }
 
 function fireAtPlayer(ex,ewy,col,spd,inaccuracy){
+  if(cloak>0) return;            // cloaked: shooters can't find the plane
   const dx=player.x-ex;
   const dwy=camY-ewy;
   const dist=Math.max(1,Math.sqrt(dx*dx+dwy*dwy));
@@ -1135,6 +1170,7 @@ function draw(){
     else if(e.type==='spreadPU') drawSpreadPU(e.x,sy);
     else if(e.type==='bridge')   drawBridge(sy,e);
     else if(e.type==='godFuel')  drawGodFuel(e.x,sy);
+    else if(e.type==='cloakFuel') drawCloakFuel(e.x,sy);
     else if(e.type==='bumper')   drawBumper(e,sy);
   }
 
@@ -1213,6 +1249,11 @@ function draw(){
 function drawPlayer(x,y,vx,spd){
   const tilt=Math.max(-.32,Math.min(.32,vx/1100));
   ctx.save(); ctx.translate(x,y); ctx.rotate(tilt);
+  if(cloak>0){
+    // ghosted while cloaked; flicker in the last 1.5s as a warning
+    const expiring=cloak<1.5&&Math.floor(titleT*10)%2===0;
+    ctx.globalAlpha=expiring?0.5:0.22+0.12*Math.sin(titleT*6);
+  }
   const isGod=godMode>0;
   const gh=(titleT*300)%360;  // rotating rainbow hue
   const bodyCol=isGod?`hsl(${(gh+180)%360},100%,82%)`:'#e8ffff';
@@ -1272,6 +1313,27 @@ function drawGodFuel(x,sy){
     ctx.fillStyle=`hsl(${(ph+s*60)%360},100%,75%)`;
     ctx.beginPath(); ctx.arc(Math.cos(a)*sr,Math.sin(a)*sr,2.5,0,7); ctx.fill();
   }
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+function drawCloakFuel(x,sy){
+  ctx.save(); ctx.translate(x,sy);
+  const sh=Math.sin(titleT*4)*0.5+0.5;           // slow phase shimmer
+  // ghostly translucent capsule
+  ctx.globalAlpha=0.45+0.35*sh;
+  ctx.shadowColor='#9fd0ff'; ctx.shadowBlur=26;
+  ctx.fillStyle='#06121f'; ctx.strokeStyle='#bfe4ff'; ctx.lineWidth=2.5;
+  roundRect(-16,-29,32,58,9); ctx.fill(); ctx.stroke();
+  // flickering ghost icon
+  ctx.globalAlpha=0.6+0.4*sh; ctx.shadowBlur=12; ctx.fillStyle='#dff1ff';
+  ctx.font='18px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('👻',0,-8);
+  ctx.font='bold 10px "Courier New"'; ctx.textBaseline='alphabetic';
+  ctx.fillStyle='#bfe4ff';
+  'CLOAK'.split('').forEach((ch,i)=>ctx.fillText(ch,0,6+i*8));
+  // shimmer scanline
+  ctx.globalAlpha=0.5*sh; ctx.strokeStyle='#dff1ff'; ctx.lineWidth=1;
+  const yy=-26+sh*52; ctx.beginPath(); ctx.moveTo(-14,yy); ctx.lineTo(14,yy); ctx.stroke();
   ctx.globalAlpha=1; ctx.restore();
 }
 
@@ -1617,6 +1679,16 @@ function drawHUD(){
       ctx.shadowBlur=0;
     }
   }
+  // cloak indicator
+  if(cloak>0){
+    const cf=Math.floor(titleT*10)%2===0||cloak>1.5;
+    if(cf){
+      ctx.textAlign='left'; ctx.font='bold 14px "Courier New"';
+      ctx.fillStyle='#bfe4ff'; ctx.shadowColor='#9fd0ff'; ctx.shadowBlur=14;
+      ctx.fillText('👻 CLOAK '+Math.ceil(cloak)+'s',12,H-84);
+      ctx.shadowBlur=0;
+    }
+  }
   // god mode indicator
   if(godMode>0){
     const gh=(titleT*300)%360;
@@ -1774,6 +1846,7 @@ function drawTitle(){
     'M = mute  ·  P = pause  ·  L = legends',
     'R = restart  ·  Q = quit  ·  B = river width',
     '⚡ GOD FUEL (violet) ..... 3s god mode!',
+    '👻 CLOAK (pale blue) ..... 7s stealth — enemies stop firing',
     '↗ SPREAD SHOT (cyan) .... 6s multi-directional fire',
     '🛡 BUMPERS on bends ..... bounce instead of crash',
     '🤿 SUBMARINES ........... surface before shooting!',
