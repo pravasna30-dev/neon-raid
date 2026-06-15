@@ -72,7 +72,7 @@
    - Version badge visible in HUD and game-over
    ===================================================================== */
 
-const W = 720, H = 760, VERSION = 'v2.6';
+const W = 720, H = 760, VERSION = 'v2.7';
 
 /* difficulty presets — all difficulty-sensitive params live here */
 const DIFF_PRESETS = [
@@ -113,7 +113,7 @@ const DIFF_PRESETS = [
     heliFireSect:2,
     jetSect:1,
     scoreBonus:2.0,
-    tip:'Relentless · Fast enemies · Score ×2',
+    tip:'Relentless · No power-ups · Score ×2',
   },
 ];
 let activePreset = DIFF_PRESETS[1]; // default medium
@@ -377,18 +377,19 @@ function advanceSpawner(){
   const x=rnd(rv.l+margin,rv.r-margin);
   const r=Math.random();
   const pal=sectorPal();
+  const powerUps=activePreset.key!=='hard';   // HARD = no mercy: plain fuel only
   if(r<0.12){
-    enemies.push(Math.random()<0.14&&sectorN>=2
+    enemies.push(powerUps&&Math.random()<0.14&&sectorN>=2
       ?{type:'godFuel',wy:spawnWy,x,w:32,h:58}
       :{type:'fuel',wy:spawnWy,x,w:32,h:58});
     return;
   }
-  if(r<0.136&&sectorN>=2){
+  if(powerUps&&r<0.136&&sectorN>=2){
     /* spread-shot power-up (rare) */
     enemies.push({type:'spreadPU',wy:spawnWy,x,w:34,h:34});
     return;
   }
-  if(r<0.150&&sectorN>=2){
+  if(powerUps&&r<0.150&&sectorN>=2){
     /* cloak power-up (rare) — temporary stealth */
     enemies.push({type:'cloakFuel',wy:spawnWy,x,w:32,h:58});
     return;
@@ -830,9 +831,8 @@ function update(dt){
         for(let t=0;t<4;t++) setTimeout(()=>{explode(rnd(80,W-80),sy+rnd(-22,22),'#ffe000',40,true);},t*110);
         addScore(500,W/2,sy-30,'#ffe000');
         sectorN++;
-        fuel=Math.min(100,fuel+42);
-        invuln=Math.max(invuln,1.8);
-        banner={txt:'SECTOR '+(sectorN-1)+' CLEARED!   +500   ★ FUEL BONUS',t:0,life:2.6};
+        invuln=Math.max(invuln,1.8);   // brief shield through the blast, not a refuel
+        banner={txt:'SECTOR '+(sectorN-1)+' CLEARED!   +500',t:0,life:2.6};
       } else if(e.type==='tanker'){
         e.hp--; e.hit=0.18;
         if(e.hp<=0){
@@ -1437,33 +1437,59 @@ function drawHeli(e,sy){
   if(dir<0) ctx.scale(-1,1);
   ctx.shadowColor=col; ctx.shadowBlur=20;
 
+  const blink=Math.floor(titleT*4)%2===0;   // nav-light blink
   if(v===1){
     /* GUNSHIP — armored body, stub wings with rocket pods */
     ctx.fillStyle=col;
     ctx.beginPath(); ctx.ellipse(0,0,18,11,0,0,7); ctx.fill();
     ctx.fillStyle=colDim; ctx.fillRect(-30,-4,20,8); ctx.fillRect(-40,-6,12,4);
-    ctx.shadowBlur=0; ctx.fillStyle=col;
-    ctx.fillRect(-4,-16,9,5); ctx.fillRect(-4,11,9,5);              // stub wings
-    ctx.fillStyle='#ffcc44'; ctx.fillRect(-1,-18,5,3); ctx.fillRect(-1,16,5,3); // rocket tips
-    ctx.fillStyle=col+'cc';                                         // armored nose
-    ctx.beginPath(); ctx.moveTo(16,-6); ctx.lineTo(25,0); ctx.lineTo(16,6); ctx.closePath(); ctx.fill();
+    ctx.shadowBlur=0;
+    ctx.fillStyle=col; ctx.beginPath(); ctx.moveTo(-40,-6); ctx.lineTo(-46,-15); ctx.lineTo(-40,-2); ctx.closePath(); ctx.fill(); // tail fin
+    ctx.fillStyle=col; ctx.fillRect(-4,-16,9,5); ctx.fillRect(-4,11,9,5);          // stub wings
+    ctx.fillStyle='#222'; ctx.fillRect(2,-16,4,5); ctx.fillRect(2,11,4,5);         // pod muzzles
+    ctx.fillStyle='#ffcc44'; ctx.fillRect(-1,-18,5,3); ctx.fillRect(-1,16,5,3);    // rocket tips
+    ctx.fillStyle=col+'cc'; ctx.beginPath(); ctx.moveTo(16,-6); ctx.lineTo(25,0); ctx.lineTo(16,6); ctx.closePath(); ctx.fill(); // armored nose
+    ctx.fillStyle='#333'; ctx.fillRect(20,3,8,2.5);                                // chin gun
+    ctx.fillStyle='#bdf0ff'; ctx.globalAlpha=0.85; ctx.beginPath(); ctx.ellipse(9,-2,5,4,0,0,7); ctx.fill(); ctx.globalAlpha=1; // canopy
+    ctx.strokeStyle='#00000066'; ctx.lineWidth=1;                                  // armor panel lines
+    ctx.beginPath(); ctx.moveTo(-12,-9); ctx.lineTo(-12,9); ctx.moveTo(0,-10); ctx.lineTo(0,10); ctx.stroke();
   } else if(v===2){
     /* HEAVY — long fuselage, tandem rotors */
     ctx.fillStyle=col; roundRect(-22,-9,44,18,8); ctx.fill();
     ctx.fillStyle=colDim; ctx.fillRect(-34,-4,14,8);
-    ctx.shadowBlur=0; ctx.fillStyle=col+'44';
-    ctx.beginPath(); ctx.ellipse(11,-1,7,5,0,0,7); ctx.fill();
+    ctx.shadowBlur=0;
+    ctx.fillStyle=col; ctx.beginPath(); ctx.moveTo(-34,-4); ctx.lineTo(-40,-14); ctx.lineTo(-34,0); ctx.closePath(); ctx.fill(); // tail fin
+    ctx.fillStyle='#bdf0ff'; ctx.globalAlpha=0.85;                                 // cabin window row
+    for(let wx=-14;wx<=12;wx+=8) ctx.fillRect(wx,-4,5,4); ctx.globalAlpha=1;
+    ctx.fillStyle=col+'44'; ctx.beginPath(); ctx.ellipse(15,-1,6,5,0,0,7); ctx.fill(); // cockpit
+    ctx.strokeStyle='#00000055'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(-20,6); ctx.lineTo(20,6); ctx.stroke(); // belly line
+    ctx.strokeStyle='#999'; ctx.lineWidth=2; ctx.beginPath();                      // landing skids
+    ctx.moveTo(-14,9); ctx.lineTo(-14,14); ctx.moveTo(14,9); ctx.lineTo(14,14); ctx.moveTo(-20,14); ctx.lineTo(20,14); ctx.stroke();
   } else {
     /* SCOUT — the light classic */
     ctx.fillStyle=col;
     ctx.beginPath(); ctx.ellipse(0,0,16,10,0,0,7); ctx.fill();
     ctx.fillStyle=colDim; ctx.fillRect(-28,-3.5,18,7); ctx.fillRect(-36,-6,10,4);
-    ctx.shadowBlur=0; ctx.fillStyle=col+'44';
-    ctx.beginPath(); ctx.ellipse(6,-1,6,5,0,0,7); ctx.fill();
+    ctx.shadowBlur=0;
+    ctx.fillStyle=col; ctx.beginPath(); ctx.moveTo(-36,-6); ctx.lineTo(-42,-14); ctx.lineTo(-36,-2); ctx.closePath(); ctx.fill(); // tail fin
+    ctx.fillStyle='#bdf0ff'; ctx.globalAlpha=0.85; ctx.beginPath(); ctx.ellipse(6,-1,6,5,0,0,7); ctx.fill(); ctx.globalAlpha=1; // bubble canopy
+    ctx.strokeStyle=col+'88'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(6,-6); ctx.lineTo(6,4); ctx.stroke();
+    ctx.strokeStyle='#999'; ctx.lineWidth=1.5; ctx.beginPath();                    // landing skids
+    ctx.moveTo(-8,9); ctx.lineTo(-8,13); ctx.moveTo(8,9); ctx.lineTo(8,13); ctx.moveTo(-13,13); ctx.lineTo(13,13); ctx.stroke();
   }
 
-  // rotor(s) — spinning blade + faint disc at each hub
+  // tail rotor on the boom
   ctx.shadowBlur=0;
+  ctx.save(); ctx.translate(v===1?-44:-40,-7); ctx.rotate(-e.rotor*1.4);
+  ctx.strokeStyle=col+'cc'; ctx.lineWidth=1.6;
+  ctx.beginPath(); ctx.moveTo(-5,0); ctx.lineTo(5,0); ctx.stroke();
+  ctx.restore();
+
+  // blinking nav light
+  ctx.fillStyle=blink?'#ff3344':'#551015'; ctx.shadowColor='#ff3344'; ctx.shadowBlur=blink?10:0;
+  ctx.beginPath(); ctx.arc(v===1?18:14,7,1.8,0,7); ctx.fill(); ctx.shadowBlur=0;
+
+  // main rotor(s) — two blades + faint disc at each hub
   const hubs=v===2?[[-13,-10],[13,-10]]:[[0,-10]];
   const rad=v===2?13:21;
   for(const [hx,hy] of hubs){
@@ -1472,6 +1498,7 @@ function drawHeli(e,sy){
     ctx.beginPath(); ctx.arc(0,0,rad,0,7); ctx.fill(); ctx.globalAlpha=1;
     ctx.strokeStyle=col+'dd'; ctx.lineWidth=2.5;
     ctx.beginPath(); ctx.moveTo(-rad,0); ctx.lineTo(rad,0); ctx.stroke();
+    ctx.globalAlpha=0.5; ctx.beginPath(); ctx.moveTo(0,-rad); ctx.lineTo(0,rad); ctx.stroke(); ctx.globalAlpha=1;
     ctx.restore();
   }
   ctx.fillStyle='#fff'; ctx.fillRect(-2,-13,4,6);    // mast
@@ -1486,40 +1513,66 @@ function drawShip(e,sy){
   const ss=e.ss||1; if(ss!==1) ctx.scale(ss,ss);
   ctx.shadowColor=col; ctx.shadowBlur=18;
 
+  const blink=Math.floor(titleT*3)%2===0;
   if(v===1){
     /* SPEEDBOAT — sleek planing hull + wake */
     ctx.fillStyle=col;
     ctx.beginPath();
     ctx.moveTo(-26,2); ctx.lineTo(20,-4); ctx.lineTo(34,2); ctx.lineTo(18,8); ctx.lineTo(-26,8);
     ctx.closePath(); ctx.fill();
-    ctx.shadowBlur=0; ctx.fillStyle='#bdf0ff'; ctx.fillRect(-6,-3,12,5);   // windshield
+    ctx.shadowBlur=0;
+    ctx.strokeStyle='#ffffff88'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(-24,4); ctx.lineTo(30,1); ctx.stroke(); // racing stripe
+    ctx.fillStyle='#bdf0ff'; ctx.fillRect(-6,-3,12,5);                    // wrap windshield
     ctx.fillStyle=col+'aa'; ctx.fillRect(-2,-1,9,3);
-    ctx.globalAlpha=0.5; ctx.strokeStyle='#bfe7ff'; ctx.lineWidth=2;       // wake
-    ctx.beginPath(); ctx.moveTo(-26,4); ctx.lineTo(-48,1);
-    ctx.moveTo(-26,7); ctx.lineTo(-46,11); ctx.stroke(); ctx.globalAlpha=1;
+    ctx.fillStyle='#223'; ctx.fillRect(-9,0,3,3); ctx.fillRect(-13,1,3,3); // seats
+    ctx.fillStyle='#444'; ctx.fillRect(-30,1,5,6);                        // outboard motor
+    ctx.globalAlpha=0.5; ctx.strokeStyle='#bfe7ff'; ctx.lineWidth=2;      // wake lines
+    ctx.beginPath(); ctx.moveTo(-30,4); ctx.lineTo(-50,1); ctx.moveTo(-30,7); ctx.lineTo(-48,12); ctx.stroke();
+    ctx.globalAlpha=0.32; ctx.fillStyle='#dff'; ctx.beginPath(); ctx.ellipse(-34,7,8,3,0,0,7); ctx.fill(); ctx.globalAlpha=1; // foam
+    ctx.fillStyle=blink?'#7fffa0':'#16331f'; ctx.shadowColor='#7fffa0'; ctx.shadowBlur=blink?8:0; // bow light
+    ctx.beginPath(); ctx.arc(32,2,1.6,0,7); ctx.fill(); ctx.shadowBlur=0;
   } else if(v===2){
-    /* GUNBOAT — armored hull, turret + radar mast */
+    /* GUNBOAT — armored hull, twin turret + spinning radar */
     ctx.fillStyle=col;
     ctx.beginPath();
     ctx.moveTo(-30,-4); ctx.lineTo(26,-4); ctx.lineTo(32,4); ctx.lineTo(26,12); ctx.lineTo(-28,12); ctx.lineTo(-32,4);
     ctx.closePath(); ctx.fill();
-    ctx.shadowBlur=0; ctx.fillStyle='#454c5a'; ctx.fillRect(-10,-12,16,9); // deckhouse
-    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(-2,-3,6,0,7); ctx.fill();  // turret
-    ctx.fillRect(2,-4.5,18,3);                                             // cannon
-    ctx.strokeStyle='#88ccff'; ctx.lineWidth=1.5;                          // radar mast
-    ctx.beginPath(); ctx.moveTo(-14,-12); ctx.lineTo(-14,-22); ctx.moveTo(-18,-22); ctx.lineTo(-10,-22); ctx.stroke();
+    ctx.shadowBlur=0;
+    ctx.strokeStyle='#00000044'; ctx.lineWidth=1; ctx.beginPath();        // deck plating
+    ctx.moveTo(-28,0); ctx.lineTo(28,-1); ctx.moveTo(-26,6); ctx.lineTo(24,6); ctx.stroke();
+    ctx.fillStyle='#454c5a'; ctx.fillRect(-10,-12,16,9);                  // armored deckhouse
+    ctx.fillStyle='#bdf0ff'; ctx.globalAlpha=0.85;                        // bridge windows
+    ctx.fillRect(-8,-10,3,3); ctx.fillRect(-3,-10,3,3); ctx.fillRect(2,-10,3,3); ctx.globalAlpha=1;
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(-2,-3,6,0,7); ctx.fill(); // turret
+    ctx.fillStyle='#222'; ctx.fillRect(2,-5,18,2); ctx.fillRect(2,-1,18,2); // twin barrels
+    ctx.fillStyle='#333'; ctx.fillRect(-30,5,8,4);                        // depth-charge rack
+    ctx.fillStyle=col+'88'; for(let dx=-29;dx<-22;dx+=3){ ctx.beginPath(); ctx.arc(dx,7,1.3,0,7); ctx.fill(); }
+    ctx.strokeStyle='#88ccff'; ctx.lineWidth=1.5;                         // radar mast
+    ctx.beginPath(); ctx.moveTo(-14,-12); ctx.lineTo(-14,-24); ctx.stroke();
+    ctx.save(); ctx.translate(-14,-24); ctx.rotate(titleT*2);             // spinning dish
+    ctx.beginPath(); ctx.moveTo(-5,0); ctx.lineTo(5,0); ctx.stroke(); ctx.restore();
+    ctx.fillStyle=blink?'#ff3344':'#511'; ctx.shadowColor='#ff3344'; ctx.shadowBlur=blink?8:0;
+    ctx.beginPath(); ctx.arc(-14,-25,1.6,0,7); ctx.fill(); ctx.shadowBlur=0;
   } else {
-    /* FREIGHTER — the classic boxy cargo ship */
+    /* FREIGHTER — boxy cargo ship with deck detail */
     ctx.fillStyle=col;
     ctx.beginPath();
     ctx.moveTo(-30,-5); ctx.lineTo(24,-5); ctx.lineTo(30,3); ctx.lineTo(24,11); ctx.lineTo(-26,11); ctx.lineTo(-30,3);
     ctx.closePath(); ctx.fill();
-    ctx.shadowBlur=0; ctx.fillStyle='#fff9cc'; ctx.fillRect(-14,-13,20,9);
-    ctx.fillStyle=col+'66';
-    [[-10,-9],[0,-9]].forEach(([px,py])=>{ ctx.beginPath(); ctx.arc(px,py,2.5,0,7); ctx.fill(); });
-    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(10,-2,5,0,7); ctx.fill();
-    ctx.fillRect(14,-2,14,3.5);
-    ctx.globalAlpha=0.5; ctx.strokeStyle='#66ccff'; ctx.lineWidth=1.5;
+    ctx.shadowBlur=0;
+    ctx.strokeStyle='#00000055'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(-28,7); ctx.lineTo(28,7); ctx.stroke(); // waterline
+    ctx.fillStyle='#fff9cc'; ctx.fillRect(-14,-13,20,9);                  // bridge superstructure
+    ctx.fillStyle='#2a3550'; for(let wx=-12;wx<4;wx+=4) ctx.fillRect(wx,-11,2.5,2.5); // bridge windows
+    ctx.fillStyle=col; ctx.fillRect(-4,-19,6,7);                          // funnel
+    ctx.fillStyle='#222'; ctx.fillRect(-4,-19,6,2);
+    ctx.globalAlpha=0.22; ctx.fillStyle='#9aa';                           // drifting smoke
+    ctx.beginPath(); ctx.arc(0,-23,3,0,7); ctx.arc(3,-27,4,0,7); ctx.fill(); ctx.globalAlpha=1;
+    ctx.strokeStyle='#888'; ctx.lineWidth=1.5;                            // deck crane
+    ctx.beginPath(); ctx.moveTo(12,-4); ctx.lineTo(20,-12); ctx.moveTo(12,-4); ctx.lineTo(12,-12); ctx.stroke();
+    [['#cc4433',16,-4],['#33aa88',22,-4],['#4488cc',16,-9],['#ddaa44',22,-9]].forEach(([c,bx,by])=>{ // containers
+      ctx.fillStyle=c; ctx.fillRect(bx,by,6,5); ctx.strokeStyle='#00000066'; ctx.strokeRect(bx,by,6,5); });
+    ctx.fillStyle=col+'88'; [-20,-16,18,24].forEach(px=>{ ctx.beginPath(); ctx.arc(px,3,1.4,0,7); ctx.fill(); }); // portholes
+    ctx.globalAlpha=0.5; ctx.strokeStyle='#66ccff'; ctx.lineWidth=1.5;    // bow wake
     ctx.beginPath(); ctx.moveTo(-30,7); ctx.lineTo(-44,7); ctx.stroke(); ctx.globalAlpha=1;
   }
   ctx.restore();
